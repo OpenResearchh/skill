@@ -209,15 +209,20 @@ def main() -> int:
         gates.append(gate("workflow_diff", "passed"))
 
         protocol = find_protocol(repo_root, args.protocol)
-        static = run([
-            sys.executable,
-            str(args.static_gates_script),
-            "--protocol",
-            str(protocol),
-            "--repo-root",
-            str(repo_root),
-            "--allow-github-workflows",
-        ])
+        with tempfile.TemporaryDirectory(prefix="arah-static-") as tmp:
+            paths_file = Path(tmp) / "changed-paths.txt"
+            paths_file.write_text("\n".join(changed) + ("\n" if changed else ""), encoding="utf-8")
+            static = run([
+                sys.executable,
+                str(args.static_gates_script),
+                "--protocol",
+                str(protocol),
+                "--repo-root",
+                str(repo_root),
+                "--allow-github-workflows",
+                "--paths-file",
+                str(paths_file),
+            ])
         if static.returncode != 0:
             gates.append(gate("static_gates", "failed", "static_gate_failed", (static.stdout + static.stderr).strip()))
             result = fail_result(bound, gates, "static_gate_failed")
