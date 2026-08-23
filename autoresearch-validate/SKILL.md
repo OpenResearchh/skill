@@ -1,78 +1,113 @@
 ---
 name: autoresearch-validate
-description: Verify OpenResearch mining proposals on-chain. Resolve code/benchmark artifacts by bytes32, rerun bundled harness, deterministic static gates, and approve/reject when the chain path is supported. Fully unattended legacy 0G driver with artifact index, no GitHub PR workflow, plus Solana settlement wrappers backed by the bundled full IDL. Use when operating a verifier node or rerunning benchmark proofs.
+description: Verify OpenResearch mining proposals and settle them. Resolve code and benchmark artifacts by their recorded hashes, rerun the bundled harness in a sandbox, apply deterministic static gates, then approve, reject, or release. Fully unattended verifier loop with append-only review records and no GitHub PR workflow, over a pluggable settlement layer. Use when operating a verifier node or rerunning benchmark proofs.
 ---
 
 # autoresearch-validate
 
-Operate an **unattended verifier** against **legacy `ProposalLedger`** on 0G Galileo (or override deployment via env). This skill **does not** watch GitHub PRs; settlement is **on-chain only**.
+Operate an **unattended verifier** over published projects. This skill **does not** watch GitHub PRs; every outcome is settled on the project's settlement layer.
 
-For projects created by the current `autoresearch-create` default path, use the
-Solana validator loop. When the user says something like **"start autoresearch
-validating `<token_address>`"**, treat `<token_address>` as the Solana project
-token mint, resolve the project on-chain, print the project summary for
-confirmation, check the validator's Solana CLI/keypair/signing setup, check the
-validator PDA registration, then run
-`scripts/run_validate_loop_solana.mjs --token-address <mint> --keypair ~/.config/solana/id.json --yes`.
-The loop claims each proposal first; only after `claim-review` succeeds does it
-download proposal artifacts, rerun the benchmark, upload verifier metrics or
-reject evidence to Irys with the validator wallet, and approve/reject/release.
+When the user says something like **"start autoresearch validating `<project>`"**,
+treat `<project>` as the project reference, resolve it, print the project
+summary for confirmation, check the verifier identity and its registration,
+then run:
 
-**Self-contained:** Bundled harness under [`vendor/harness/`](vendor/harness/), contracts under [`contracts/0g-galileo-testnet/`](contracts/0g-galileo-testnet/), and local fixtures under [`fixtures/`](fixtures/) are included so the skill can run after installation without sibling skill folders.
+```bash
+node scripts/validate_loop.mjs \
+  --project-id <project_id> \
+  --identity <keystore id or key file> \
+  --yes
+```
+
+The loop claims each proposal first; only after the claim succeeds does it
+download proposal artifacts, restore the project's own harness over the
+submitted tree, rerun the benchmark, upload verifier metrics or reject evidence,
+and approve/reject/release.
+
+**Self-contained:** Bundled harness under [`vendor/harness/`](vendor/harness/), contracts under [`contracts/`](contracts/), and local fixtures under [`fixtures/`](fixtures/) are included so the skill can run after installation without sibling skill folders.
 
 ## Prerequisites
 
-- `jq`, `bash`, `python3` on PATH (harness); `python3 -m pip install -r requirements-chain.txt` for RPC scripts.
-- For Solana validation: Node dependencies installed (`npm install` from the repo root or `autoresearch-validate` root), Solana CLI on PATH, and a Solana keypair able to sign and pay gas. If `solana --version` fails, install it before proceeding.
+- `jq`, `bash`, `python3` on PATH (harness); `python3 -m pip install -r requirements-chain.txt` and `npm install` (from the repo root or `autoresearch-validate` root) for the settlement adapters.
 - A sandbox runtime — **`podman`** (preferred), **`docker`**, or **`bwrap`**. Verifiers re-run untrusted miner code, so the harness refuses to execute it without a sandbox unless `ARAH_SANDBOX=none ARAH_SANDBOX_ALLOW_UNSAFE=1` is set explicitly (do not do this in production).
-- **`VerifierRegistry.isVerifier(your_address)`** must be true on-chain.
-- For Solana, the validator wallet must have a verifier PDA/account. If it is not registered, stop and report that directly; do not try to validate proposals.
-- A passphrase-encrypted **verifier wallet keystore**: `python3 scripts/wallet.py init --id verifier-1`. All settlement scripts (`claim_review.py`, `finalize_approve.py`, `finalize_reject.py`, `release_review.py`, `expire_proposal.py`, `run_validate_loop.py`) take **`--wallet-id`** + **`--passphrase-file`** (or `ARAH_WALLET_PASSPHRASE`). They do **not** read `ARAH_PRIVATE_KEY`.
-- **Exactly one** of **`ARAH_ARTIFACT_INDEX`** (local JSON file) or **`ARAH_ARTIFACT_INDEX_URL`** (HTTP GET) — maps each **`codeHash`** to downloadable artifacts (see [`schemas/artifact_index.schema.json`](schemas/artifact_index.schema.json)). `schemaVersion: "2"` lets index entries declare `sandbox_image_digest` and `network_policy_used`; the validator pins the harness to those exact values for the run, eliminating false rejects from sandbox / network drift between miner and verifier.
+- A funded **verifier identity** on the active settlement layer, and that identity must be **registered as a verifier**. See [Identity and funding](#identity-and-funding).
+- Where the layer does not publish proposal artifacts itself, **exactly one** of **`ARAH_ARTIFACT_INDEX`** (local JSON file) or **`ARAH_ARTIFACT_INDEX_URL`** (HTTP GET) — maps each code hash to downloadable artifacts (see [`schemas/artifact_index.schema.json`](schemas/artifact_index.schema.json)). `schemaVersion: "2"` lets index entries declare `sandbox_image_digest` and `network_policy_used`; the validator pins the harness to those exact values for the run, eliminating false rejects from sandbox / network drift between miner and verifier.
+
+## Settlement layer
+
+`scripts/validate_loop.mjs` is the only review-and-settle entrypoint this skill uses. It resolves the active settlement layer and hands the work to that layer's adapter. Resolution order, first match wins:
+
+1. `--chain <name>` on the command line
+2. `ARAH_CHAIN` in the environment
+3. `.autoresearch/chain.json` in the working directory, e.g. `{"chain":"solana"}`
+4. the built-in default
+
+Supported names are `solana` and `0g`; `solana` is the default. Pass **`--show-chain`** (or set **`ARAH_SHOW_CHAIN=1`**) to print which layer and adapter were selected — do that first whenever the loop fails in a way that looks layer-specific. Unknown flags are forwarded to the adapter unchanged, so layer-specific options (alternate project identifiers, endpoint overrides, workspace paths) stay reachable without appearing here.
+
+Layer detail lives in the reference docs, not here:
+
+- `solana` → [`references/onchain-verify-solana.md`](references/onchain-verify-solana.md)
+- `0g` → [`references/onchain-verify-0g.md`](references/onchain-verify-0g.md)
+
+## Identity and funding
+
+Verifying needs an identity on the active settlement layer that can sign settlement actions and pay their fees.
+
+- Pass it as **`--identity <ref>`**; `validate_loop.mjs` translates that to whatever the active adapter expects (a keystore id on one layer, a key file path on another). The reference doc for the layer names the exact form and any companion flag such as a passphrase file.
+- The identity **must be registered as a verifier** on that layer. If it is not, stop and report that directly — do not attempt to review proposals. The loop checks this before sending anything.
+- The identity must have enough balance to pay settlement fees.
+- Where a layer's adapter needs a local signing key, it stays in a passphrase-encrypted keystore that only that adapter's wallet helper decrypts. No settlement script reads `ARAH_PRIVATE_KEY`. Never ask the user for a private key or seed phrase.
+
+Follow the active layer's reference doc for the exact identity setup, registration check, and funding steps before starting the loop.
 
 ## Unattended rules
 
 - Export **`GIT_TERMINAL_PROMPT=0`** for git-enabled harness steps.
-- Do **not** prompt the operator mid-loop; stop on **`VALIDATE_MAX_PROPOSALS`**, empty queue, or fatal RPC/key errors.
+- Do **not** prompt the operator mid-loop; stop on the proposal cap, empty queue, or fatal endpoint/key errors.
 - **`prompts/*.md`** are **non-authoritative** (documentation only).
 
 ## Environment variables
 
-### Required for settlement
+### Settlement-neutral
 
 | Variable / argument | Purpose |
 |----------|---------|
-| `--wallet-id <id>` (CLI) | Verifier wallet keystore id from `scripts/wallet.py init` |
-| `--passphrase-file <path>` (CLI) or `ARAH_WALLET_PASSPHRASE` | Passphrase source for the keystore |
-| `ARAH_ARTIFACT_INDEX` **or** `ARAH_ARTIFACT_INDEX_URL` | Artifact manifest (see schema) |
-
-### Chain overrides (same family as mine)
-
-| Variable | Purpose |
-|----------|---------|
-| `ARAH_DEPLOYMENT_JSON` | Path to `deployment.json` (default: bundled `contracts/0g-galileo-testnet/deployment.json`) |
-| `ARAH_RPC_URL` | RPC endpoint |
-| `ARAH_CHAIN_ID` | Default **16602** |
-| `ARAH_PROPOSAL_LEDGER` / `ARAH_PROJECT_REGISTRY` / `ARAH_VERIFIER_REGISTRY` | Address overrides |
+| `--identity <ref>` (CLI) | Verifier identity for the active settlement layer |
+| `ARAH_CHAIN` | Settlement layer to use when `--chain` is not passed |
+| `ARAH_SHOW_CHAIN` | `1` to print which layer and adapter `validate_loop.mjs` selected |
+| `ARAH_ARTIFACT_INDEX` **or** `ARAH_ARTIFACT_INDEX_URL` | Artifact manifest, where the layer needs one (see schema) |
 
 ### Metrics / protocol
 
 | Variable | Purpose |
 |----------|---------|
-| `ARAH_METRIC_SCALE` | int256 scale for decimal metrics (default **1000000**, match `createProject`) |
-| `ARAH_PROTOCOL_SUBPATH` | Path inside extracted tarball to `protocol.json` (default **`.autoresearch/publish/protocol.json`**) |
-| `ARAH_SKIP_PROTOCOL_HASH_COMPARE` | If `1`/`true`/`yes`, skip SHA-256(protocol.json) vs `ProjectRegistry.protocolHash` |
-| `ARAH_CLAIMABLE_STATUS_CODES` | Comma-separated claimable `status` integers (overrides [`constants/status_enum.json`](constants/status_enum.json)) |
+| `ARAH_METRIC_SCALE` | Signed-integer scale for decimal metrics (default **1000000**; must match the scale the project was published with) |
+| `ARAH_PROTOCOL_SUBPATH` | Path inside an extracted tarball to `protocol.json` (default **`.autoresearch/publish/protocol.json`**) |
+| `ARAH_EXTRA_PERMIT_GLOBS` | Extra `:`-separated glob permits for `verify_static_gates.py` |
 
-### Records / limits
+### Sandbox / records / limits
 
 | Variable | Purpose |
 |----------|---------|
+| `ARAH_SANDBOX` / `ARAH_SANDBOX_ALLOW_UNSAFE` | Sandbox runtime selection; `none` requires the explicit unsafe override |
 | `ARAH_VERIFY_RECORD_ROOT` | Repo root where **`.autoresearch/verify/reviews.jsonl`** is appended (default: skill root directory) |
-| `VALIDATE_MAX_PROPOSALS` | Cap per `run_validate_loop.py` run (default **50**, overridable by `--max-proposals`) |
+| `VALIDATE_MAX_PROPOSALS` | Cap on proposals processed per run (default **50**, overridable by `--max-proposals` where the adapter supports it) |
 | `ARAH_ARTIFACT_FETCH_TIMEOUT` | HTTP timeout seconds (default **120**) |
-| `ARAH_EXTRA_PERMIT_GLOBS` | Extra `:`-separated glob permits for `verify_static_gates.py` |
-| `AUTORESEARCH_CREATE_SCRIPTS` | Directory containing Solana helper modules (`solana_open_research.mjs`, `irys_storage.mjs`); defaults to sibling `autoresearch-create/scripts`. |
+
+### Adapter-specific
+
+These configure one settlement layer's adapter and are not part of the primary flow. Set them only when that layer's reference doc tells you to.
+
+| Variable | Layer | Purpose |
+|----------|-------|---------|
+| `AUTORESEARCH_CREATE_SCRIPTS` | `solana` | Directory containing the client helper modules (`solana_open_research.mjs`, `irys_storage.mjs`); defaults to sibling `autoresearch-create/scripts`. |
+| `ARAH_DEPLOYMENT_JSON` | `0g` | Path to `deployment.json` (default: bundled `contracts/0g-galileo-testnet/deployment.json`) |
+| `ARAH_RPC_URL` | `0g` | RPC endpoint |
+| `ARAH_CHAIN_ID` | `0g` | Default **16602** |
+| `ARAH_PROPOSAL_LEDGER` / `ARAH_PROJECT_REGISTRY` / `ARAH_VERIFIER_REGISTRY` | `0g` | Address overrides |
+| `ARAH_WALLET_PASSPHRASE` | `0g` | Passphrase source for the verifier keystore; prefer `--passphrase-file` |
+| `ARAH_SKIP_PROTOCOL_HASH_COMPARE` | `0g` | If `1`/`true`/`yes`, skip SHA-256(protocol.json) vs the registry's recorded protocol hash |
+| `ARAH_CLAIMABLE_STATUS_CODES` | `0g` | Comma-separated claimable `status` integers (overrides [`constants/status_enum.json`](constants/status_enum.json)) |
 
 ## Machine layout
 
@@ -88,78 +123,119 @@ Initialize with **`scripts/init_verify_workspace.sh <repo_root>`**.
 
 | Resource | Role |
 |----------|------|
-| `contracts/solana-open-research/` | Solana program deployment metadata + full bundled Anchor IDL. |
-| `contracts/0g-galileo-testnet/` | `deployment.json` + ABIs (`ProposalLedger`, `ProjectRegistry`, `VerifierRegistry`, `ProjectToken`) |
-| `vendor/harness/` | `run_baseline.sh` trial harness (sync with create/mine) |
-| `scripts/chain_config.py` | Resolve deployment + env |
-| `scripts/artifact_resolve.py` | Download tarball + verify `codeHash`; verify miner benchmark log vs `benchmarkLogHash` |
-| `scripts/resolve_proposal_artifacts_solana.mjs` | Fetch Solana `Proposal`, download code/log by on-chain Irys ids, and verify hashes. |
+| `vendor/harness/` | Vendored `run_baseline.sh`, `run_measured_trials.sh`, `aggregate_samples.py`, `derive_trial_seed.py` trial harness (sync with create/mine) |
+| `scripts/chain.mjs` | Settlement-layer resolution and the operation → adapter registry. The only file that maps `validateLoop` onto a concrete implementation. |
+| `scripts/validate_loop.mjs` | **Review pending proposals and settle them.** Neutral entrypoint: `--project-id`, `--identity`, `--once`, `--dry-run`, `--yes`, `--chain`, `--show-chain`; other flags pass through to the adapter. |
+| `scripts/restore_trusted_harness.py` | Overwrite every protocol-immutable path in the submitted tree with the project's own published harness, and report any path that diverged (divergence on an immutable path is tampering) |
 | `scripts/verify_static_gates.py` | Forbidden globs + permit lists + red-flag regex |
-| `scripts/run_verify_trial.sh` | Runs harness under `.autoresearch/verify/runs/` |
-| `scripts/run_validate_loop.py` | End-to-end unattended pipeline |
-| `scripts/run_validate_loop_solana.mjs` | Solana validator daemon: resolve project by token mint/project id, check CLI + verifier PDA, poll proposals, claim first, verify, upload metrics/evidence to Irys, then settle. |
-| `scripts/watch_proposals.py` | Print claimable proposal ids |
-| `scripts/check_verifier_eligibility.py` | `isVerifier` query |
-| `scripts/claim_review.py` | `claimReview` |
-| `scripts/finalize_approve.py` | `approve` |
-| `scripts/finalize_reject.py` | `reject` |
-| `scripts/release_review.py` | `releaseReview` |
-| `scripts/expire_proposal.py` | `expire` |
-| `scripts/settle_proposal_solana.mjs` | Solana `claim_review`, `approve`, `reject`, `release_review`, `expire`, and `claim_reward`. |
-| `scripts/upload_irys_file_solana.mjs` | Upload verifier metrics/evidence to Irys using the validator Solana keypair and print the Irys id used by settlement. |
-| `scripts/metrics_hash.py` | SHA-256 → bytes32 hex |
-| `scripts/parse_baseline_metric.py` | Parse `BASELINE_METRIC=` from harness log |
-| `references/onchain-verify-0g.md` | Verifier-specific hash + economics notes |
-| `references/onchain-mining-0g.md` | Miner submit-path context needed when interpreting proposals |
-| `references/onchain-verify-solana.md` | Solana + Irys verifier path, reusable checks, and settlement blockers. |
+| `scripts/run_verify_trial.sh` | Repeated-sample harness run under `.autoresearch/verify/runs/<review_id>/`; writes `samples.json` |
+| `scripts/verify_exploit_claim.py` | Attack-track review: bind an exploit claim to a protocol/diff, gate touched paths, measure base vs patched with the repeated-trial harness, and evaluate the declared witness |
+| `scripts/artifact_resolve.py` | Download tarball + verify code hash; verify the miner benchmark log against its recorded hash |
+| `scripts/append_review_record.py` | Append one review row to `.autoresearch/verify/reviews.jsonl` |
+| `scripts/metrics_hash.py` | SHA-256 → 32-byte hex |
+| `scripts/parse_baseline_metric.py` | Parse `BASELINE_METRIC=` from a harness log |
+| `references/onchain-verify-solana.md` | Verifier setup, artifact resolution, and settlement detail for the `solana` layer |
+| `references/onchain-verify-0g.md` | Verifier setup, hash + economics notes, and the legacy pipeline ordering for the `0g` layer |
+| `references/onchain-mining-0g.md` | Miner submit-path context needed when interpreting `0g` proposals |
+| `references/exploit-review.md` | How to review attack-track exploit claims |
 | `fixtures/build_synthetic_fixture.py` | Builds local fixture data for `scripts/run_tests.sh` |
+
+### Adapter-specific resources
+
+Do not call these from the workflow; `validate_loop.mjs` selects the right one. They are listed so the files are identifiable when a reference doc names them.
+
+| Resource | Layer | Role |
+|----------|-------|------|
+| `scripts/run_validate_loop_solana.mjs` | `solana` | Validator daemon: resolve project, check CLI + verifier account, poll proposals, claim first, fetch trusted project artifacts, verify, upload metrics/evidence, then settle. |
+| `scripts/resolve_proposal_artifacts_solana.mjs` | `solana` | Fetch the proposal, download code/log by their recorded storage ids, verify hashes, extract code. |
+| `scripts/fetch_project_artifacts_solana.mjs` | `solana` | Fetch the **project's own** protocol + benchmark harness by their recorded storage ids and hash-verify them, so scoring never uses inputs taken from the submission. |
+| `scripts/settle_proposal_solana.mjs` | `solana` | `claim-review`, `release-review`, `approve`, `reject`, `expire`, `claim-reward`. |
+| `scripts/upload_irys_file_solana.mjs` | `solana` | Upload verifier metrics/evidence and print the storage id used by settlement. |
+| `contracts/solana-open-research/` | `solana` | Deployment metadata + full bundled Anchor IDL. |
+| `scripts/run_validate_loop.py` | `0g` | End-to-end unattended pipeline. |
+| `scripts/watch_proposals.py` | `0g` | Print claimable proposal ids. |
+| `scripts/check_verifier_eligibility.py` | `0g` | `isVerifier` query. |
+| `scripts/claim_review.py`, `finalize_approve.py`, `finalize_reject.py`, `release_review.py`, `expire_proposal.py` | `0g` | Individual ledger settlement calls. |
+| `scripts/wallet.py` | `0g` | Verifier wallet keystore. The only place a private key is decrypted. |
+| `scripts/chain_config.py` | `0g` | Resolve deployment + env. |
+| `contracts/0g-galileo-testnet/` | `0g` | `deployment.json` + ABIs (`ProposalLedger`, `ProjectRegistry`, `VerifierRegistry`, `ProjectToken`). |
 
 ## Pipeline ordering (normative)
 
-The ordering below is for the legacy 0G path. For Solana projects,
-`run_validate_loop_solana.mjs` is the normative unattended path:
+This is the order `validate_loop.mjs` drives. Adapters differ in where artifact
+resolution sits relative to the claim and in which settlement call implements
+each step; the reference doc for the active layer records those differences.
 
-1. Resolve the project from `--token-address <project_mint>` or `--project-id`.
-2. Print project identity (`projectId`, token mint/name/symbol, current best,
-   program id, cluster) before live mode; require `--yes` to proceed.
-3. Check `solana --version`, keypair readability, CLI address, and balance.
-4. Check the validator PDA. If missing, print "not registered as verifier" and stop with no transactions.
-5. Poll `Proposal` accounts for the project with `status=Pending` and `stake > 0`.
-6. Send `claim-review`. If it fails, skip that proposal.
-7. Download proposal code/log from on-chain Irys ids and verify SHA-256 hashes.
-8. Extract code, run static gates, rerun the benchmark in the sandbox, parse `BASELINE_METRIC`.
-9. Convert metric to aggregate score: `maximize => scaled(metric)`, `minimize => -scaled(metric)`, with `ARAH_METRIC_SCALE` semantics (`1e6` default).
-10. If aggregate score equals `claimedAggregateScore`, upload verifier stdout log to Irys and `approve --verified-score-int256`.
-11. If static gates fail or aggregate score mismatches, upload reject evidence to Irys and `reject`.
-12. If the harness fails or metric parsing fails, `release-review` rather than slash.
-
-Legacy 0G path:
-
-1. **`getProposal`**: skip if `status` ∉ claimable set ([`constants/status_enum.json`](constants/status_enum.json)).
-2. **`artifact_resolve`**: fail → **skip** (no chain tx), record `artifact_resolve_failed`.
-3. Extract tarball; load **`protocol.json`** at `ARAH_PROTOCOL_SUBPATH`.
-4. **Protocol hash**: `SHA-256(protocol.json)` vs `ProjectRegistry.getProject(projectId).protocolHash` unless skipped → mismatch → **`claimReview` + `reject`** (fraud).
-5. Else **`claimReview`** → **`verify_static_gates`** → **`run_verify_trial`**.
-6. Parse metric; compare scaled int to on-chain **`claimedAggregateScore`** (strict equality).
-7. Outcomes:
-   - **Match** → **`approve`** with `metricsHash = SHA-256(harness stdout log)`.
-   - **Static-gate fail / metric mismatch / metric encode fail** → **`reject`** with evidence file as metrics log (slashing — these are unambiguous miner-side faults).
-   - **Harness exit ≠ 0 / metric not parseable from log** → **`releaseReview`** (NOT reject). These signals are ambiguous: they could be miner-side, but they could also be verifier-side (no sandbox runtime, image divergence, `networkPolicy=full` without `ARAH_ALLOW_FULL_NETWORK=1`). Slashing on those signals is unsafe; let another verifier try. If every verifier fails, the proposal eventually expires.
+1. Resolve the project from `--project-id` (or the layer's alternate identifier).
+2. Print project identity — project id, reward token, current best, settlement
+   target — before live mode; require **`--yes`** to proceed.
+3. Check the verifier identity: readable, its address, and its balance.
+4. Check verifier registration. If the identity is not registered, print
+   "not registered as verifier" and stop **with no settlement sent**.
+5. Poll for pending proposals on the project with `stake > 0`.
+6. **Claim the review first.** If the claim fails, skip that proposal — another
+   verifier already holds it.
+7. Download the proposal's code and benchmark log by their recorded ids and
+   verify their hashes. A resolve failure is a **skip**, not a reject; record
+   `artifact_resolve_failed`.
+8. Fetch the **project's own** `protocol.json` and benchmark harness by the
+   project's recorded ids and verify their hashes. Never read the protocol,
+   the harness, or the metric extraction out of the submission being judged —
+   that would let whoever wrote the submission decide how it is scored.
+9. Restore the trusted harness over every protocol-immutable path in the
+   submitted tree (`restore_trusted_harness.py`). Divergence on an immutable
+   path is tampering → upload evidence and **reject**.
+10. Run **`verify_static_gates.py`**. Fail → upload evidence and **reject**.
+11. Rerun the benchmark in the sandbox with **`run_verify_trial.sh`**. This is a
+    repeated sample, not one run; the aggregate and the full sample land in
+    `samples.json`.
+12. Convert the verifier's **own** aggregate metric to a score:
+    `maximize => scaled(metric)`, `minimize => -scaled(metric)`, with
+    `ARAH_METRIC_SCALE` semantics (`1e6` default).
+13. Approve if the verified score beats the project's current best by at least
+    `measurement.minScoreImprovementBips` (default 100). Upload the verifier
+    metrics first, then **approve** with the verified score. The miner's claimed
+    score is recorded but never gates the outcome: comparing the two would
+    reject honest work whenever the verifier's host differs from the miner's,
+    and a claim the verifier cannot reproduce is worth nothing regardless of
+    what it says.
+14. Outcomes:
+    - **Improvement clears the margin** → **approve**, with the verifier metrics
+      as the recorded metrics artifact.
+    - **Harness tampered / static-gate fail / no improvement over the current
+      best** → **reject** with an evidence file (slashing — these are
+      unambiguous miner-side faults).
+    - **Harness exit ≠ 0 / sample too dispersed to score / metric not
+      parseable** → **release the review** (NOT reject). These signals are
+      ambiguous: they could be miner-side, but they could also be verifier-side
+      (no sandbox runtime, image divergence, a noisy host, `networkPolicy=full`
+      without `ARAH_ALLOW_FULL_NETWORK=1`). Slashing on those signals is unsafe;
+      let another verifier try. If every verifier fails, the proposal eventually
+      expires.
 
 ## Script exit codes (selected)
 
 | Script | Codes |
 |--------|-------|
+| `validate_loop.mjs` | Passes through the adapter's exit code; **1** if the adapter cannot be launched or the configured layer is unsupported |
 | `artifact_resolve.py` | 0 ok; 1 IO/validation; 2 missing index entry |
+| `restore_trusted_harness.py` | 0 restored, nothing diverged; 2 usage error or unreadable trusted input; **3** an immutable path diverged (treat as tampering) |
 | `verify_static_gates.py` | 0 pass; 3 forbidden; 4 not permitted; 5 red flag |
-| `check_verifier_eligibility.py` | 0 verifier; 2 not verifier |
-| `watch_proposals.py` | 0 |
-| `run_validate_loop.py` | 0 loop finished; 1 RPC / missing key |
+| `run_verify_trial.sh` | Same as `run_measured_trials.sh`; **3** if the harness dir is missing; **4** if the sample was too dispersed to score |
+
+### Adapter-specific exit codes
+
+| Script | Layer | Codes |
+|--------|-------|-------|
+| `run_validate_loop_solana.mjs` | `solana` | 0 loop finished; 1 args / endpoint / identity / not registered as verifier |
+| `check_verifier_eligibility.py` | `0g` | 0 verifier; 2 not verifier |
+| `watch_proposals.py` | `0g` | 0 |
+| `run_validate_loop.py` | `0g` | 0 loop finished; 1 RPC / missing key |
 
 ## Out of scope
 
-TEE attestation automation, IPFS/0G Storage upload daemons (operators supply **`ARAH_ARTIFACT_INDEX`**), GitHub PR merges.
+TEE attestation automation, artifact-storage upload daemons (operators supply **`ARAH_ARTIFACT_INDEX`** where the layer needs one), GitHub PR merges.
 
 ## Final response
 
-Report **`reviews.jsonl`** path, last proposal ids processed, and whether txs were sent (`--dry-run` if applicable).
+Report **`reviews.jsonl`** path, last proposal ids processed, and whether settlement was sent (`--dry-run` if applicable).

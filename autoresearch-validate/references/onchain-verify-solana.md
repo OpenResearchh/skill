@@ -1,5 +1,25 @@
 # Solana OpenResearch — verifier path
 
+This is the reference for the `solana` settlement layer. Select it with
+`--chain solana`, `ARAH_CHAIN=solana`, or `.autoresearch/chain.json`; it is also
+the default when nothing is configured.
+
+The workflow calls `scripts/validate_loop.mjs`, which delegates here:
+
+| Neutral entrypoint | Adapter | Flag translation |
+|---|---|---|
+| `scripts/validate_loop.mjs` | `scripts/run_validate_loop_solana.mjs` | `--identity` → `--keypair` |
+
+Adapter flags pass straight through: `--token-address`, `--once`, `--yes`,
+`--dry-run`, `--poll-seconds`, `--work-dir`, `--record-root`, `--cluster`,
+`--rpc-url`, `--program-id`.
+
+Prerequisites specific to this layer: Node dependencies installed
+(`npm install`), the Solana CLI on PATH (`solana --version` must succeed —
+install it before proceeding), and a Solana keypair able to sign and pay gas.
+The validator wallet must also have a verifier PDA/account; if it is not
+registered, the loop stops and reports that without sending transactions.
+
 Solana verification must validate the same benchmark claims as the legacy 0G
 path, but the chain and artifact assumptions change.
 
@@ -47,29 +67,54 @@ The verifier can keep these existing local checks:
 
 ## Validator Loop
 
-For normal operation, start from the project token mint:
+For normal operation, run the neutral entrypoint:
 
 ```bash
-node scripts/run_validate_loop_solana.mjs \
-  --token-address <PROJECT_TOKEN_MINT> \
-  --keypair ~/.config/solana/id.json \
+node scripts/validate_loop.mjs \
+  --project-id <project_id> \
+  --identity ~/.config/solana/id.json \
   --yes
 ```
 
-The script resolves and prints the project first. It checks `solana --version`,
+This layer can also start from the project token mint; `--token-address` passes
+straight through:
+
+```bash
+node scripts/validate_loop.mjs \
+  --token-address <PROJECT_TOKEN_MINT> \
+  --identity ~/.config/solana/id.json \
+  --yes
+```
+
+The adapter resolves and prints the project first. It checks `solana --version`,
 the keypair address/balance, and the validator PDA. If the wallet is not a
 registered verifier, it stops without sending transactions.
 
 The loop is claim-first: it sends `claim-review` for a pending staked proposal,
 and only if that transaction succeeds does it download artifacts, set up the
-sandboxed verification run, and settle. Approve/reject always uploads the
-verifier metrics log or reject evidence to Irys using the same Solana keypair
-before calling settlement; do not skip the Irys step.
+sandboxed verification run, and settle. Before scoring, it fetches the
+**project's own** `protocol.json` and benchmark harness with
+`fetch_project_artifacts_solana.mjs` (by the Irys ids on the `Project` account,
+hash-verified) and runs `restore_trusted_harness.py` over the submitted tree, so
+the judge is never built out of the artifact being judged. Divergence on a
+protocol-immutable path is tampering and is rejected with evidence.
+
+Approve/reject always uploads the verifier metrics log or reject evidence to
+Irys using the same Solana keypair before calling settlement; do not skip the
+Irys step.
 
 Score comparison uses aggregate-score semantics because the contract only
 accepts increasing scores. `maximize` metrics are scaled directly; `minimize`
 metrics are negated after scaling. With the default scale of `1_000_000`, a
 minimized benchmark value of `1.981456` becomes aggregate score `-1981456`.
+
+The loop settles on the verifier's own repeated-sample measurement against the
+score the network already holds: approve when the verified aggregate score
+clears the current best by `measurement.minScoreImprovementBips`, reject with
+`no_improvement` evidence when it does not. The miner's
+`claimedAggregateScore` is recorded in the review row but never gates the
+outcome. A `run_verify_trial.sh` exit of 4 means the sample was too dispersed to
+score on this host — release the review, do not reject.
 
 ## Manual Settlement
 
@@ -113,7 +158,5 @@ approve dry-runs pass `--miner` plus `--reward-recipient`.
 
 1. Add a dedicated event-based `watch_solana_proposals.mjs` instead of polling
    `nextProposalId`.
-2. Add a Solana branch to `run_validate_loop.py` or make it dispatch to
-   `run_validate_loop_solana.mjs`.
-3. Extend review records with `chain`, `cluster`, `programId`, `projectPda`,
+2. Extend review records with `chain`, `cluster`, `programId`, `projectPda`,
    and `proposalPda`.

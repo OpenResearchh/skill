@@ -240,9 +240,49 @@
               "type": "string",
               "enum": ["optional", "required"]
             },
+            "seedDerivation": { "$ref": "#/$defs/SeedDerivation" },
             "notes": { "type": "string" }
           }
         }
+      }
+    },
+    "SeedDerivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "description": "How the per-trial seed is chosen. `fiat_shamir` derives it from a hash of the candidate's own mutable surface, so the seed changes whenever the code changes. That makes the evaluation inputs impossible to tune against without also moving them, and it needs no secret held-out set — which matters because a permissionless verifier network has nowhere to keep one. Miner and verifier derive the same seed from the same code, so the run stays reproducible.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["none", "fixed", "fiat_shamir"],
+          "description": "none: harness sets no seed. fixed: always `fixedSeed`. fiat_shamir: derived from the candidate code."
+        },
+        "envVar": {
+          "type": "string",
+          "default": "ARAH_TRIAL_SEED",
+          "description": "Environment variable the harness exports the derived seed into."
+        },
+        "fixedSeed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Seed value when mode is `fixed`."
+        },
+        "seedBits": {
+          "type": "integer",
+          "enum": [32, 64],
+          "default": 64,
+          "description": "Width of the derived seed."
+        },
+        "sourcePaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Globs hashed to derive the seed when mode is `fiat_shamir`. Defaults to mutableSurface.allowedGlobs when omitted."
+        },
+        "salt": {
+          "type": "string",
+          "description": "Optional project-specific salt mixed into the derivation (e.g. the protocol hash) so seeds do not collide across projects."
+        },
+        "notes": { "type": "string" }
       }
     },
     "MiningLoop": {
@@ -323,12 +363,49 @@
         "extract": { "$ref": "#/$defs/MetricExtract" }
       }
     },
+    "Sampling": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How many times a scored run is repeated and how the repeats are reduced to one number. A single run of a wall-clock or throughput benchmark is dominated by host noise, so scoring one run makes noise indistinguishable from discovery. Miner and verifier both use these values.",
+      "properties": {
+        "warmupTrials": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 1,
+          "description": "Trials run and discarded before measurement begins, to absorb cold caches and JIT warmup."
+        },
+        "measuredTrials": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5,
+          "description": "Trials whose metrics are kept and reduced by `aggregator`."
+        },
+        "aggregator": {
+          "type": "string",
+          "enum": ["median", "mean", "min", "max"],
+          "default": "median",
+          "description": "Reduction over measured trials. `median` is the default because it is robust to a single outlier trial in either direction."
+        },
+        "maxRelativeStdDev": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Optional. If set and the measured coefficient of variation exceeds it, the run is reported as too noisy to score rather than being scored."
+        }
+      }
+    },
     "Measurement": {
       "type": "object",
       "additionalProperties": false,
       "required": ["primaryMetric", "baselinePolicy"],
       "properties": {
         "primaryMetric": { "$ref": "#/$defs/PrimaryMetric" },
+        "sampling": { "$ref": "#/$defs/Sampling" },
+        "minScoreImprovementBips": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 100,
+          "description": "Minimum relative improvement over the current best, in basis points (100 = 1%), for a candidate to count as an improvement. Set this above the benchmark's measured noise floor so that run-to-run variance cannot be submitted as a discovery."
+        },
         "secondaryMetrics": {
           "type": "array",
           "items": { "$ref": "#/$defs/SecondaryMetric" }

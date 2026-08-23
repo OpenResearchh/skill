@@ -1,6 +1,23 @@
 # Solana OpenResearch — miner path
 
-The Solana path is now the default for projects created by
+This is the reference for the `solana` settlement layer. Select it with
+`--chain solana`, `ARAH_CHAIN=solana`, or `.autoresearch/chain.json`; it is also
+the default when nothing is configured.
+
+The workflow calls the neutral entrypoints, which delegate here:
+
+| Neutral entrypoint | Adapter | Flag translation |
+|---|---|---|
+| `scripts/bootstrap_project.mjs` | `scripts/bootstrap_from_solana.mjs` | `--prepare-repo` → `--unpack-repo` |
+| `scripts/submit_trial_proposal.py --chain solana` | `scripts/submit_proposal_solana.mjs` | identity is `--solana-keypair` |
+
+Every adapter flag below can be passed straight through `bootstrap_project.mjs`
+unchanged, including `--from-baseline` (start from the project's original
+snapshot instead of the current best code — use it only to reproduce the
+baseline) and `--idl` / `--cluster` / `--rpc-url` / `--program-id` /
+`--gateway-url` / `--network`.
+
+The Solana path is the default for projects created by
 `autoresearch-create`. Project metadata is stored in the OpenResearch Solana
 program, and project artifacts are stored on Irys.
 
@@ -57,7 +74,20 @@ can be proposed automatically.
 
 `scripts/bootstrap_from_solana.mjs` fetches the Solana `Project` account,
 downloads the four project bootstrap artifacts by their on-chain Irys ids,
-verifies the raw SHA-256 hashes, and can unpack the repo snapshot:
+verifies the raw SHA-256 hashes, can unpack the repo snapshot, and writes
+`.autoresearch/mine/network_state.json` with `source: solana` (project id,
+cluster, program id, `network_best_metric`, `aggregate_score_int256`,
+`metric_scale`, `code_origin`, `min_score_improvement_bips`). Reach it through
+the neutral entrypoint:
+
+```bash
+node scripts/bootstrap_project.mjs \
+  --project-id <project_id> \
+  --output-dir /tmp/arah-project \
+  --prepare-repo
+```
+
+Equivalent direct call:
 
 ```bash
 node scripts/bootstrap_from_solana.mjs \
@@ -149,10 +179,14 @@ native SOL, rechecks the token balance, and only then calls `submit`. Override
 the quote with `--buy-lamports` only when necessary; use `--skip-buy` only for
 diagnostic runs.
 
+Use `--no-auto-buy` only for diagnostic runs where submission is expected to
+fail without existing stake, and `--solana-buy-lamports` only to override the
+automatic quote.
+
 ## Remaining Follow-up
 
-1. Add a first-class Solana `network_state.json` schema branch and
-   `scripts/sync_solana_frontier.mjs`.
+1. Add a standalone `scripts/sync_solana_frontier.mjs` so the frontier can be
+   refreshed without re-running bootstrap.
 2. Add a wallet upload path for proposal code/log artifacts so miners do not
    need to upload to Irys out-of-band before passing `--code-irys-id` and
    `--benchmark-log-irys-id`.

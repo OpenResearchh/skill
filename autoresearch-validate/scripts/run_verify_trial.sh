@@ -19,6 +19,10 @@ REVIEW_ID=$3
 
 RUN_DIR="$REPO_ROOT/.autoresearch/verify/runs/$REVIEW_ID"
 mkdir -p "$RUN_DIR"
-LOG_FILE="$RUN_DIR/stdout.log"
 
-exec bash "$CREATE_SCRIPTS_DIR/run_baseline.sh" "$PROTOCOL" "$REPO_ROOT" --log "$LOG_FILE"
+# Score a repeated sample, not a single run. One run of a wall-clock or
+# throughput benchmark is dominated by host noise, so a lone measurement
+# cannot distinguish a real improvement from variance. Sampling counts come
+# from measurement.sampling in the protocol.
+exec bash "$CREATE_SCRIPTS_DIR/run_measured_trials.sh" "$PROTOCOL" "$REPO_ROOT" \
+  --out "$RUN_DIR/samples.json" --run-dir "$RUN_DIR"

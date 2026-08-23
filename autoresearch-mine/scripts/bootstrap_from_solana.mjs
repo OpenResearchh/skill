@@ -39,12 +39,14 @@ Options:
   --repo-root <path>       Where --unpack-repo extracts repo-snapshot.tar.
   --unpack-repo            Extract repo snapshot and initialize .autoresearch/mine.
   --skip-existing          Reuse existing downloads after hash verification.
+  --from-baseline          Start from the project's original snapshot instead of
+                           the current best code. Use only to reproduce the baseline.
 `);
 }
 
 function parseArgs(argv) {
   const options = {};
-  const boolKeys = new Set(["help", "unpackRepo", "skipExisting"]);
+  const boolKeys = new Set(["help", "unpackRepo", "skipExisting", "fromBaseline"]);
   for (let i = 0; i < argv.length; i += 1) {
     const raw = argv[i];
     if (!raw.startsWith("--")) throw new Error(`unexpected argument: ${raw}`);
@@ -63,6 +65,20 @@ function parseArgs(argv) {
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+// An all-zero bytes32 is how the program represents "unset". A project with no
+// approved proposal yet has zeroed currentBestCode* fields.
+function isZeroBytes32(value) {
+  if (!value) return true;
+  const bytes = Array.from(value);
+  return bytes.length === 0 || bytes.every((b) => Number(b) === 0);
+}
+
+function aggregateScoreToMetric(score, direction, scale) {
+  // Aggregate score negates for minimize so that "greater is better" holds
+  // on-chain; undo that here to recover the human-readable metric.
+  return Number(direction === "minimize" ? -score : score) / scale;
 }
 
 function resolveBundledIdlPath(options) {
@@ -92,6 +108,55 @@ function readonlyWallet() {
       throw new Error("read-only wallet cannot sign");
     },
   };
+}
+
+// Seed the miner's frontier from the on-chain Project account so the loop
+// compares candidates against what the network has actually accepted, rather
+// than against a hand-edited placeholder.
+function writeNetworkState({ repoRoot, protocolPath, project, projectId, config, codeOrigin }) {
+  let protocol;
+  try {
+    protocol = readJson(protocolPath);
+  } catch {
+    console.error("protocol.json unreadable; leaving network_state.json untouched");
+    return;
+  }
+  const primary = protocol?.measurement?.primaryMetric;
+  const direction = primary?.direction;
+  if (direction !== "minimize" && direction !== "maximize") {
+    console.error("protocol has no usable primaryMetric.direction; leaving network_state.json untouched");
+    return;
+  }
+
+  const scale = Number(process.env.ARAH_METRIC_SCALE || 1_000_000);
+  const scoreText = codeOrigin === "currentBestCode"
+    ? project.currentBestAggregateScore?.toString?.()
+    : project.baselineAggregateScore?.toString?.();
+  const score = scoreText === undefined || scoreText === null ? null : BigInt(scoreText);
+  const best = score === null ? null : aggregateScoreToMetric(score, direction, scale);
+
+  const state = {
+    schemaVersion: "1",
+    source: "solana",
+    protocolBundleId: protocol?.meta?.protocolBundleId || `solana:project:${projectId}`,
+    project_id: Number(projectId),
+    cluster: config.cluster,
+    program_id: config.programId.toBase58(),
+    network_best_metric: best,
+    aggregate_score_int256: score?.toString?.() ?? "0",
+    metric_scale: scale,
+    metric_name: primary?.name || "primary",
+    direction,
+    code_origin: codeOrigin,
+    min_score_improvement_bips: Number(
+      protocol?.measurement?.minScoreImprovementBips ?? 100,
+    ),
+    updated_at: new Date().toISOString(),
+  };
+  const statePath = path.join(repoRoot, ".autoresearch", "mine", "network_state.json");
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n");
+  console.error(`network_state.json synced (best=${best ?? "none"} ${state.metric_name})`);
 }
 
 function run(cmd, args, options = {}) {
@@ -129,14 +194,43 @@ async function main() {
   const projectPda = pdas.project(options.projectId);
   const project = await program.account.project.fetch(projectPda);
 
+  // Start from the best code the network has accepted so far, not from the
+  // project's genesis snapshot. Every approved proposal advances
+  // currentBestCode* on-chain; bootstrapping from it is what makes the work
+  // compound, so miner N+1 builds on miner N instead of rediscovering the
+  // same ground. Genesis projects have this field zeroed and fall back to the
+  // original snapshot, as does --from-baseline for reproducing the baseline.
+  const hasCurrentBest =
+    !options.fromBaseline && !isZeroBytes32(project.currentBestCodeIrysId);
+  const codeSource = hasCurrentBest
+    ? {
+        origin: "currentBestCode",
+        hash: solana.bytes32ToHex(project.currentBestCodeHash, "currentBestCodeHash"),
+        irysId: solana.bytes32ToIrysId(
+          project.currentBestCodeIrysId,
+          "currentBestCodeIrysId",
+        ),
+      }
+    : {
+        origin: "repoSnapshot",
+        hash: solana.bytes32ToHex(project.repoSnapshotHash, "repoSnapshotHash"),
+        irysId: solana.bytes32ToIrysId(project.repoSnapshotIrysId, "repoSnapshotIrysId"),
+      };
+  console.error(
+    codeSource.origin === "currentBestCode"
+      ? `starting from current best code (score ${project.currentBestAggregateScore})`
+      : "starting from the project's original snapshot",
+  );
+
   const artifacts = {
     protocol: {
       hash: solana.bytes32ToHex(project.protocolHash, "protocolHash"),
       irysId: solana.bytes32ToIrysId(project.protocolIrysId, "protocolIrysId"),
     },
     repoSnapshot: {
-      hash: solana.bytes32ToHex(project.repoSnapshotHash, "repoSnapshotHash"),
-      irysId: solana.bytes32ToIrysId(project.repoSnapshotIrysId, "repoSnapshotIrysId"),
+      hash: codeSource.hash,
+      irysId: codeSource.irysId,
+      origin: codeSource.origin,
     },
     benchmark: {
       hash: solana.bytes32ToHex(project.benchmarkHash, "benchmarkHash"),
@@ -187,6 +281,14 @@ async function main() {
     fs.mkdirSync(repoRoot, { recursive: true });
     run("tar", ["-xf", path.join(artifactsDir, "repo-snapshot.tar"), "-C", repoRoot]);
     run("bash", [path.join(SCRIPT_DIR, "init_mine_workspace.sh"), repoRoot]);
+    writeNetworkState({
+      repoRoot,
+      protocolPath: path.join(artifactsDir, "protocol.json"),
+      project,
+      projectId: options.projectId,
+      config,
+      codeOrigin: codeSource.origin,
+    });
   }
 
   const record = {
@@ -201,6 +303,7 @@ async function main() {
     artifactsDir,
     protocolJson: path.join(artifactsDir, "protocol.json"),
     repoRoot,
+    codeOrigin: codeSource.origin,
     currentBestAggregateScore: project.currentBestAggregateScore?.toString?.() ?? null,
   };
   const recordPath = path.join(outputDir, "bootstrap_solana.json");

@@ -1,6 +1,6 @@
 ---
 name: autoresearch-create
-description: Create an OpenResearch experiment protocol from a GitHub repository or local checkout. Builds a discovery prompt bundle, emits a DiscoveryDraft JSON, asks the protocol questionnaire, finalizes protocol.json, renders program.md, runs a baseline, then asks the user whether to publish an eligible project to the configured on-chain registry. Use when the user asks to create/start/bootstrap an autoresearch or OpenResearch project from a repo.
+description: Create an OpenResearch experiment protocol from a GitHub repository or local checkout. Builds a discovery prompt bundle, emits a DiscoveryDraft JSON, asks the protocol questionnaire, finalizes protocol.json, renders program.md, runs a baseline, then asks the user whether to publish an eligible project to the configured settlement layer. Use when the user asks to create/start/bootstrap an autoresearch or OpenResearch project from a repo.
 ---
 
 # autoresearch-create
@@ -24,18 +24,19 @@ Use the bundled experiment-protocol toolkit in this skill directory. Do not modi
 - `scripts/render_program_md.py` and `templates/program.md.j2`: render `program.md` from finalized `protocol.json`.
 - `scripts/preview_metrics.py`: print a focused benchmark review block from `protocol.json` for the Step 5b approval gate.
 - `scripts/run_baseline.sh`: run setup plus the primary command from `protocol.json` and parse the baseline metric.
-- `scripts/publish_project_solana.mjs`: default publish path. Prepares and publishes the Solana OpenResearch `createProject` call via a localhost browser wallet (Phantom/Solflare/Backpack/Wallet Standard); dry-run emits PDA/account plans, live mode uploads artifacts to Irys and submits via the connected wallet without a filesystem private key.
-- `scripts/local_solana_wallet_publish.mjs`: localhost HTTP + HTML page used by the Solana publish flow to discover Solana wallet extensions, upload artifacts to Irys, build the unsigned `createProject` transaction, and capture the wallet-signed transaction signature.
-- `scripts/irys_storage.mjs`: prepares raw SHA-256 artifact hashes, Irys browser upload plans, and `storage_irys.json` metadata for Solana publishes.
-- `scripts/publish_project_0g.mjs`: alternate path. Prepare and publish legacy 0G Galileo `ProjectRegistry.createProject(...)` via a localhost browser wallet flow, or write an unsigned transaction/dry-run artifact.
-- `scripts/solana_open_research.mjs`: Solana client helpers for RPC/program config, bytes32/u64/i64 conversion, PDAs, Associated Token Accounts, and Anchor account maps.
-- `contracts/solana-open-research/deployment.json`: OpenResearch Solana program id, public cluster RPC defaults, and the path to the bundled Anchor IDL.
-- `contracts/solana-open-research/open_research.json`: bundled full Anchor IDL covering project creation, miner proposals, verifier settlement, reward claims, and account decoding. Used by default; override with `--idl` when testing another build.
-- `contracts/0g-galileo-testnet/deployment.json`: deployed 0G Galileo testnet contract addresses and artifact paths (alternate path).
-- `contracts/0g-galileo-testnet/artifacts/*.json`: ABI/artifact JSON for `ProjectRegistry`, `ProjectToken`, `ProposalLedger`, and `VerifierRegistry`.
-- `references/onchain-solana.md`: Solana program id, PDA seeds, and publish flow. Read it for the default Solana publish work.
-- `references/onchain-0g-galileo.md`: ABI-derived on-chain create, mining, and review flow for the 0G Galileo alternate path.
+- `scripts/run_measured_trials.sh`: repeated-sample wrapper around `run_baseline.sh`; prints `AGGREGATE_METRIC=` and writes the full sample. Used by the mine skill's trial harness.
+- `scripts/publish_project.mjs`: **the publish entrypoint.** Resolves the active settlement layer and delegates to that layer's adapter. Accepts `--chain <name>`, `--show-chain`, and forwards every other flag to the adapter unchanged.
+- `scripts/chain.mjs`: settlement-layer resolution and the operation → adapter registry. The only file that maps `publishProject` onto a concrete implementation.
+- `references/onchain-solana.md`: setup, identity, storage, and publish detail for the `solana` settlement layer.
+- `references/onchain-0g-galileo.md`: setup, identity, storage, and publish detail for the `0g` settlement layer.
 - `workflow.md`: detailed phase diagram. Read it when the user asks for process detail.
+
+### Adapter-specific resources
+
+Do not call these directly from the workflow; `publish_project.mjs` selects the right one. They are listed so the files are identifiable when a reference doc names them.
+
+- `scripts/publish_project_solana.mjs`, `scripts/local_solana_wallet_publish.mjs`, `scripts/irys_storage.mjs`, `scripts/solana_open_research.mjs`, `contracts/solana-open-research/*`: the `solana` adapter, its browser-wallet signing page, artifact-storage helper, client helpers, and bundled deployment metadata plus full Anchor IDL.
+- `scripts/publish_project_0g.mjs`, `scripts/publish_project_0g_lib.mjs`, `contracts/0g-galileo-testnet/*`: the `0g` adapter, its shared input-preparation library, and bundled deployment metadata plus ABI artifacts.
 
 ## Step 1: Collect inputs
 
@@ -187,7 +188,7 @@ scripts/run_baseline.sh <output-dir>/protocol.json <repo-path> --log <output-dir
 
 On success, capture `BASELINE_METRIC=<value>` and update or report the baseline artifact according to `protocol.json` fields `measurement.baselinePolicy` and `provenance`.
 
-## Step 8: Ask to publish on-chain
+## Step 8: Ask to publish
 
 Publishing is the handoff that lets other people discover and contribute to the open research project. After a measured baseline succeeds, make publishing the default next step for eligible projects.
 
@@ -201,30 +202,48 @@ Only ask to publish after:
 Ask the user directly:
 
 ```text
-The baseline is complete. Do you want me to publish this project to the Solana OpenResearch registry now?
+The baseline is complete. Do you want me to publish this project now?
 ```
 
-Do not submit a transaction until the user approves publishing and the signing/wallet requirements are satisfied.
+Do not publish anything until the user approves and the identity requirements below are satisfied.
 
-The default publish target is the Solana OpenResearch program. The default signing path is a temporary localhost browser wallet page. The CLI opens `http://127.0.0.1:<port>/...`; the browser discovers injected Solana wallets (Phantom, Solflare, Backpack) plus any Wallet Standard wallet, uploads the artifacts to Irys with the connected Solana wallet, then asks the user to approve a single `createProject` transaction. Do not ask the user for a private key, seed phrase, 0G key, or web2 API key. Pass `--keypair ~/.config/solana/id.json` only when the user explicitly opts into a filesystem keypair and `--allow-skip-storage`.
+### Settlement layer
 
-Read `references/onchain-solana.md` before preparing the transaction. The active program id is `ACfzPQJkUJ74bdnmvV6FmB8Me3s1cPA3ayWjt2vHRsv3` on Solana devnet. `scripts/publish_project_solana.mjs` ships the bundled full Anchor IDL at `contracts/solana-open-research/open_research.json`; pass `--idl` only when testing another build.
+`scripts/publish_project.mjs` is the only publish entrypoint this workflow uses. It resolves the active settlement layer, then hands the work to that layer's adapter. Resolution order, first match wins:
 
-Prepare `createProject(...)` arguments from the approved protocol and baseline artifacts:
+1. `--chain <name>` on the command line
+2. `ARAH_CHAIN` in the environment
+3. `.autoresearch/chain.json` in the working directory, e.g. `{"chain":"solana"}`
+4. the built-in default
 
-- `protocolHash`, `repoSnapshotHash`, `benchmarkHash`, and `baselineMetricsHash` must be 32-byte hashes.
-- Prefer Irys storage (default for live Solana publishes, or `--upload-artifacts-to-irys` in dry-run). The Solana instruction stores both raw SHA-256 hashes and 32-byte Irys transaction ids; `storage_irys.json` records the readable ids and gateway URLs for retrieval.
-- `baselineAggregateScore` must be the agreed signed integer representation of the primary metric. Ask the user to confirm scaling for decimal metrics.
-- Ask for `tokenName`, `tokenSymbol`, `basePrice`, `slope`, and `minerPoolCap` if not already specified.
+Supported names are `solana` and `0g`; `solana` is the default. Pass `--show-chain` (or set `ARAH_SHOW_CHAIN=1`) to print which layer and adapter were selected — do that first whenever a publish fails in a way that looks layer-specific. Any flag `publish_project.mjs` does not recognize is forwarded to the adapter unchanged, so layer-specific options stay reachable without appearing in this workflow.
 
-Irys uses Solana wallet signing/payment: devnet/testnet publishes use Irys devnet, and mainnet-beta publishes use Irys mainnet. Override with `--irys-network devnet|mainnet` only when the user explicitly asks. Pass `--allow-skip-storage` only if the user intentionally wants registry hashes that point to nothing retrievable.
+### Identity and funding
 
-After a successful transaction, record the Solana transaction signature, project id, creator pubkey, account map, instruction args, and `storage_irys.json` next to the protocol authoring bundle.
+Publishing requires an identity on the active settlement layer that can sign the registration and pay for it, plus for artifact storage when uploading. The default signing path is a temporary localhost page: the CLI prints a `http://127.0.0.1:<port>/...` URL, the user connects their existing wallet in the browser, and that wallet — never this skill — signs and pays.
 
-Preferred command shape (browser wallet, default):
+**Do not ask the user for a private key, seed phrase, or API key.** A headless signing path exists for automation; use it only when the user explicitly opts in, and read the reference first because it changes what the publish can do.
+
+Read the reference for the active layer before preparing the publish, and follow its setup steps exactly:
+
+- `solana` → `references/onchain-solana.md`
+- `0g` → `references/onchain-0g-galileo.md`
+
+Each reference covers the network defaults, the one-time deployment bootstrap, the artifact-storage flow and its retention caveats, the headless signing opt-in, and the layer-specific flags that pass through the entrypoint.
+
+### Publish inputs
+
+Prepare arguments from the approved protocol and baseline artifacts:
+
+- `--protocol-json`, `--repo-snapshot-file`, `--benchmark-file`, `--baseline-metrics-file`: the four artifacts recorded with the project. The adapter hashes the raw file bytes; how the layer stores those hashes is in the reference doc.
+- `--baseline-aggregate-score`: the agreed signed integer representation of the approved primary metric. Ask the user to confirm scaling for decimal metrics, or pass `--baseline-metric <decimal> --metric-scale <integer>` and let the CLI scale deterministically.
+- `--upload-artifacts`: upload the four artifacts to the active layer's storage so miners and verifiers can retrieve exactly what was published. Prefer this. Publishing hashes that point at nothing retrievable requires an explicit opt-out flag documented in the reference; only use it if the user asks for it deliberately.
+- `--token-name`, `--token-symbol`, `--base-price`, `--slope`, `--miner-pool-cap`: reward-token parameters. Ask the user if not already specified. The units of `--base-price` and `--slope` are layer-specific; see the reference doc.
+
+Preferred command shape:
 
 ```bash
-node scripts/publish_project_solana.mjs \
+node scripts/publish_project.mjs \
   --protocol-json <output-dir>/protocol.json \
   --repo-snapshot-file <repo-snapshot-artifact> \
   --benchmark-file <benchmark-artifact> \
@@ -232,26 +251,16 @@ node scripts/publish_project_solana.mjs \
   --baseline-aggregate-score <integer-score> \
   --token-name "<name>" \
   --token-symbol <symbol> \
-  --base-price <lamports> \
-  --slope <lamports> \
+  --base-price <integer> \
+  --slope <integer> \
   --miner-pool-cap <token-units> \
-  --upload-artifacts-to-irys \
+  --upload-artifacts \
   --yes
 ```
 
-Use `--dry-run` first when values are uncertain (defaults `--project-id` to 0). Use `--baseline-metric <decimal> --metric-scale <integer>` instead of `--baseline-aggregate-score` when the measured metric needs deterministic scaling. The filesystem keypair path cannot upload to Irys; use the browser-wallet path unless the user explicitly chooses `--keypair ... --allow-skip-storage`.
+Use `--dry-run` first when values are uncertain: the adapter validates inputs and writes a plan file next to the protocol bundle instead of settling anything.
 
-### Alternate path: 0G Galileo
-
-The legacy 0G Galileo EVM registry remains supported. Use it only when the user explicitly asks. Read `references/onchain-0g-galileo.md` before preparing that transaction. Use `contracts/0g-galileo-testnet/deployment.json` for the legacy deployment:
-
-- chain ID `16602`
-- RPC `https://evmrpc-testnet.0g.ai`
-- `ProjectRegistry` `0xc84768e450534974C0DD5BAb7c1b695744124136`
-- `ProposalLedger` `0x701db5f8Ed847651209A438695dfe5520adD6A5A`
-- `VerifierRegistry` `0x257974E406f206BfAEd3abB8D93C232e3226f032`
-
-The 0G Galileo path uses `scripts/publish_project_0g.mjs` with the same browser-wallet flow (EIP-6963, SIWE-style approval, then `eth_sendTransaction`).
+After a successful publish, record the project id, the settlement reference (transaction id/hash), the publishing identity, and the storage manifest next to the protocol authoring bundle.
 
 ## Final response
 
@@ -260,6 +269,6 @@ Report:
 1. path to `protocol.json`
 2. path to `program.md`, if rendered
 3. path to `baseline_run.log`, if run
-4. on-chain project id, token address, and transaction hash, if published
+4. project id, reward-token identifier, and settlement reference, if published
 5. eligibility state and blockers, if any
 6. next action: review `protocol.json`, add harness if `needs_harness`, proceed to baseline, or ask to publish if `eligible` and baseline succeeded

@@ -1,5 +1,14 @@
 # 0G Galileo On-Chain Publishing
 
+This is the reference for the `0g` settlement layer. The workflow calls
+`scripts/publish_project.mjs`; when `0g` is the active layer that entrypoint
+delegates to `scripts/publish_project_0g.mjs` and translates
+`--upload-artifacts` into `--upload-artifacts-to-0g`. Every other flag below can
+be passed straight through `publish_project.mjs`. Select this layer with
+`--chain 0g`, `ARAH_CHAIN=0g`, or `.autoresearch/chain.json`.
+
+`--base-price` and `--slope` are denominated in wei on this layer.
+
 Use this reference only after the create flow has a finalized `protocol.json`, the benchmark has passed the Step 5b approval gate, and an eligible project has a measured baseline.
 
 ## Deployment
