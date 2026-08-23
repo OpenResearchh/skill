@@ -30,6 +30,26 @@ Verifier ─► autoresearch-validate ─► re-runs benchmark in TEE ─► app
               Rejected: stake slashed across verifier pool + burn
 ```
 
+## GitHub Verification Bridge
+
+OpenResearch also supports a GitHub-first coordination path for projects that
+want GitHub to be the distribution, discovery, and CI verification surface while
+the blockchain remains the economic ledger.
+
+In this flow, miners work on hypothesis branches, submit a staked proposal with
+code/log CIDs and an exact GitHub head SHA, then open a PR containing a
+machine-readable `openresearch-proposal` block. The mined repository installs
+the workflow template from
+[`autoresearch-validate/templates/openresearch-github-verifier.yml`](autoresearch-validate/templates/openresearch-github-verifier.yml)
+under its own `.github/workflows/`; this skills repository does not run that
+verifier on ordinary maintenance PRs. GitHub Actions verifies the PR head, code
+hash, static/integrity gates, and optionally the benchmark. A trusted settlement
+bridge consumes `verification-result.json`, settles on-chain, and only then can
+automation auto-merge the exact approved PR head.
+
+The bridge is documented in
+[`autoresearch-mine/references/github-verification-bridge.md`](autoresearch-mine/references/github-verification-bridge.md).
+
 ## Technology Partners
 
 | Partner | Role |

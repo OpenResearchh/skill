@@ -14,6 +14,29 @@ mining while preserving the settlement layer as the economic ledger.
 - Leave room for future TEE or pure-chain verifiers to consume the same
   proposal metadata and verification result shape.
 
+## Where the workflow lives
+
+This repository is the OpenResearch skills/protocol repository. It should ship
+the GitHub verifier as a template, not run it as an active workflow for ordinary
+maintenance PRs here.
+
+Install this template into each mined project repository:
+
+```text
+autoresearch-validate/templates/openresearch-github-verifier.yml
+```
+
+Target path in the mined repository:
+
+```text
+.github/workflows/openresearch-github-verifier.yml
+```
+
+The template checks out the mined repository into `candidate/` and checks out
+the OpenResearch verifier scripts into `openresearch/`, then runs verification
+against the candidate checkout. Projects may pin `verifier_repo` and
+`verifier_ref` in `workflow_dispatch` or by editing the installed workflow.
+
 ## Proposal-first binding
 
 V1 uses a proposal-first order:

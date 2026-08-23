@@ -1,0 +1,119 @@
+name: OpenResearch GitHub Verifier
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+    inputs:
+      protocol_path:
+        description: "Path to protocol.json inside the mined repository"
+        required: false
+        default: ".autoresearch/publish/protocol.json"
+      run_benchmark:
+        description: "Run benchmark verification"
+        required: false
+        default: "false"
+      proposal_json_path:
+        description: "Optional path to GitHubBoundProposal JSON inside the mined repository"
+        required: false
+        default: ""
+      pr_body_path:
+        description: "Optional path to a PR body markdown file inside the mined repository"
+        required: false
+        default: ""
+      verifier_repo:
+        description: "Repository containing the OpenResearch verifier scripts"
+        required: false
+        default: "OpenResearchh/experiment-protocol"
+      verifier_ref:
+        description: "Git ref for the verifier scripts"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  verify:
+    name: Verify OpenResearch proposal binding
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.body, 'openresearch-proposal') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mined repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          path: candidate
+
+      - name: Checkout OpenResearch verifier
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.verifier_repo || 'OpenResearchh/experiment-protocol' }}
+          ref: ${{ github.event.inputs.verifier_ref || 'main' }}
+          path: openresearch
+
+      - name: Write PR body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          PR_BODY_PATH: ${{ github.event.inputs.pr_body_path || '' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          body_path = os.environ.get("PR_BODY_PATH", "")
+          candidate_body = Path("candidate") / body_path if body_path else None
+          if candidate_body and candidate_body.is_file():
+              body = candidate_body.read_text(encoding="utf-8")
+          else:
+              body = os.environ.get("PR_BODY", "")
+          Path(".openresearch-pr-body.md").write_text(body, encoding="utf-8")
+          PY
+
+      - name: Verify proposal metadata and static gates
+        env:
+          RUN_BENCHMARK: ${{ github.event.inputs.run_benchmark || 'false' }}
+          PROTOCOL_PATH: ${{ github.event.inputs.protocol_path || '.autoresearch/publish/protocol.json' }}
+          PROPOSAL_JSON_PATH: ${{ github.event.inputs.proposal_json_path || '' }}
+        run: |
+          verifier="openresearch/autoresearch-validate/scripts/github_verify_pr.py"
+          static_gates="openresearch/autoresearch-validate/scripts/verify_static_gates.py"
+          run_trial="openresearch/autoresearch-validate/scripts/run_verify_trial.sh"
+          compare_metric="openresearch/autoresearch-validate/scripts/compare_metric.py"
+          args=(
+            --repo-root candidate
+            --output verification-result.json
+            --static-gates-script "$static_gates"
+            --run-verify-trial-script "$run_trial"
+            --compare-script "$compare_metric"
+          )
+          if [[ -n "$PROPOSAL_JSON_PATH" && -f "candidate/$PROPOSAL_JSON_PATH" ]]; then
+            args+=(--proposal-json "candidate/$PROPOSAL_JSON_PATH")
+          else
+            args+=(--pr-body-file .openresearch-pr-body.md)
+          fi
+          if [[ -f "candidate/$PROTOCOL_PATH" ]]; then
+            args+=(--protocol "candidate/$PROTOCOL_PATH")
+          elif [[ -f candidate/protocol.json ]]; then
+            args+=(--protocol candidate/protocol.json)
+          fi
+          if [[ "$RUN_BENCHMARK" == "true" ]]; then
+            args+=(--run-benchmark)
+          fi
+          set +e
+          python3 "$verifier" "${args[@]}"
+          status=$?
+          if [[ -f verification-result.json ]]; then
+            echo "== OpenResearch verification result =="
+            python3 -m json.tool verification-result.json
+          fi
+          exit "$status"
+
+      - name: Upload verification result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openresearch-verification-result
+          path: verification-result.json

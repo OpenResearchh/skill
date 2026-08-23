@@ -141,6 +141,7 @@ Initialize with **`scripts/init_verify_workspace.sh <repo_root>`**.
 | `scripts/github_verify_pr.py` | GitHub CI verifier: parse `openresearch-proposal`, verify head SHA and code hash, run static gates, optionally rerun benchmark, and emit `verification-result.json`. |
 | `scripts/settlement_bridge.py` | Chain-neutral bridge from `verification-result.json` to an explicit settlement plan. Adapter-specific transaction submission is kept outside untrusted PR jobs. |
 | `schemas/verification_result.schema.json` | Structured GitHub CI verification result consumed by settlement automation. |
+| `templates/openresearch-github-verifier.yml` | Workflow template to copy into mined project repositories as `.github/workflows/openresearch-github-verifier.yml`. Do not install it as an active workflow in this skills repository. |
 | `references/onchain-verify-solana.md` | Verifier setup, artifact resolution, and settlement detail for the `solana` layer |
 | `references/onchain-verify-0g.md` | Verifier setup, hash + economics notes, and the legacy pipeline ordering for the `0g` layer |
 | `references/onchain-mining-0g.md` | Miner submit-path context needed when interpreting `0g` proposals |
