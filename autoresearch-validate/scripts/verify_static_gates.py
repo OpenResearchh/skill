@@ -42,6 +42,8 @@ HARD_DENY = [
     ".idea/runConfigurations/**",
 ]
 
+GITHUB_WORKFLOW_DENY = ".github/workflows/**"
+
 
 def match_any(path: str, globs: list[str]) -> bool:
     path_f = path.replace("\\", "/")
@@ -79,6 +81,11 @@ def main() -> int:
     ap.add_argument("--protocol", type=Path, required=True)
     ap.add_argument("--repo-root", type=Path, required=True)
     ap.add_argument("--red-flags-file", type=Path, default=DEFAULT_RED_FLAGS)
+    ap.add_argument(
+        "--allow-github-workflows",
+        action="store_true",
+        help="Allow existing .github/workflows files. Use only after a diff gate has rejected PR changes to workflow files.",
+    )
     args = ap.parse_args()
     proto = json.loads(args.protocol.read_text(encoding="utf-8"))
     ms = proto.get("mutableSurface") or {}
@@ -97,9 +104,14 @@ def main() -> int:
         print("repo root not found", file=sys.stderr)
         return 2
 
+    hard_deny = [
+        pattern
+        for pattern in HARD_DENY
+        if not (args.allow_github_workflows and pattern == GITHUB_WORKFLOW_DENY)
+    ]
     text_suffixes = {".py", ".sh", ".md", ".txt", ".c", ".h", ".cpp", ".cc", ".rs", ".toml", ".yaml", ".yml", ".json"}
     for rel, p in iter_files(root):
-        if match_any(rel, HARD_DENY):
+        if match_any(rel, hard_deny):
             print(f"hard-denied path: {rel}", file=sys.stderr)
             return 3
         if match_any(rel, forbidden):

@@ -129,6 +129,15 @@ def parse_aggregate(samples_path: Path) -> float:
     return float(samples["aggregate"])
 
 
+def changed_paths(repo_root: Path, base_sha: str | None, head_sha: str) -> list[str]:
+    if not base_sha:
+        return []
+    diff = run(["git", "diff", "--name-only", f"{base_sha}..{head_sha}"], cwd=repo_root)
+    if diff.returncode != 0:
+        raise ValueError(diff.stderr.strip() or "cannot compute changed paths")
+    return [line.strip() for line in diff.stdout.splitlines() if line.strip()]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path("."))
@@ -190,8 +199,25 @@ def main() -> int:
             return 1
         gates.append(gate("code_hash", "passed"))
 
+        changed = changed_paths(repo_root, github.get("base_sha"), current_head)
+        workflow_changes = [p for p in changed if p.startswith(".github/workflows/")]
+        if workflow_changes:
+            gates.append(gate("workflow_diff", "failed", "workflow_changed", ", ".join(workflow_changes)))
+            result = fail_result(bound, gates, "workflow_changed")
+            args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+            return 1
+        gates.append(gate("workflow_diff", "passed"))
+
         protocol = find_protocol(repo_root, args.protocol)
-        static = run([sys.executable, str(args.static_gates_script), "--protocol", str(protocol), "--repo-root", str(repo_root)])
+        static = run([
+            sys.executable,
+            str(args.static_gates_script),
+            "--protocol",
+            str(protocol),
+            "--repo-root",
+            str(repo_root),
+            "--allow-github-workflows",
+        ])
         if static.returncode != 0:
             gates.append(gate("static_gates", "failed", "static_gate_failed", (static.stdout + static.stderr).strip()))
             result = fail_result(bound, gates, "static_gate_failed")

@@ -24,11 +24,11 @@ on:
       verifier_repo:
         description: "Repository containing the OpenResearch verifier scripts"
         required: false
-        default: "OpenResearchh/experiment-protocol"
+        default: "OpenResearchh/skill"
       verifier_ref:
         description: "Git ref for the verifier scripts"
         required: false
-        default: "main"
+        default: "github-actions-based-verifier"
 
 permissions:
   contents: read
@@ -51,8 +51,8 @@ jobs:
       - name: Checkout OpenResearch verifier
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.event.inputs.verifier_repo || 'OpenResearchh/experiment-protocol' }}
-          ref: ${{ github.event.inputs.verifier_ref || 'main' }}
+          repository: ${{ github.event.inputs.verifier_repo || 'OpenResearchh/skill' }}
+          ref: ${{ github.event.inputs.verifier_ref || 'github-actions-based-verifier' }}
           path: openresearch
 
       - name: Write PR body
