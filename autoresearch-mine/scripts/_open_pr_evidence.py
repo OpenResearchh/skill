@@ -26,6 +26,7 @@ def main() -> int:
         trial = json.load(f)
 
     direction = proto["measurement"]["primaryMetric"]["direction"]
+    min_improvement_bips = int((proto.get("measurement") or {}).get("minScoreImprovementBips", 100))
     cand = trial.get("primary_metric_value")
     if cand is None or not trial.get("run_ok", False):
         print("trial missing metric or run_ok false", file=sys.stderr)
@@ -56,6 +57,8 @@ def main() -> int:
             str(cand),
             "--baseline",
             str(nb),
+            "--min-improvement-bips",
+            str(min_improvement_bips),
         ],
         check=False,
         capture_output=True,
