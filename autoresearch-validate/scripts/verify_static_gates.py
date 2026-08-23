@@ -97,6 +97,8 @@ def main() -> int:
     extra = os.environ.get("ARAH_EXTRA_PERMIT_GLOBS")
     if extra:
         permit.extend([x.strip() for x in extra.split(":") if x.strip()])
+    if args.allow_github_workflows:
+        permit.append(GITHUB_WORKFLOW_DENY)
     red_patterns = load_red_flag_patterns(args.red_flags_file) if args.red_flags_file.is_file() else []
 
     root = args.repo_root.resolve()
