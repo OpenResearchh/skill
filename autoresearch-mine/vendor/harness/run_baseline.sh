@@ -173,6 +173,25 @@ PY
 
 # Each line in $SETUP_ARGV_FILE is a JSON array — one command argv per line.
 
+# Per-trial seed. When the protocol derives the seed from the candidate's own
+# mutable surface, the evaluation inputs move whenever the code moves, so a
+# candidate cannot be tuned against a fixed set of inputs. Miner and verifier
+# derive the same seed from the same bytes, so the run stays reproducible.
+SEED_ENV=()
+SEED_MODE=$(jq -r '.execution.determinism.seedDerivation.mode // "none"' "$PROTOCOL")
+if [[ "$SEED_MODE" != "none" ]]; then
+  set +e
+  SEED_KV=$(python3 "$SCRIPT_DIR/derive_trial_seed.py" \
+    --protocol "$PROTOCOL" --repo-root "$REPO_ROOT" --print-env)
+  SEED_RC=$?
+  set -e
+  case "$SEED_RC" in
+    0) SEED_ENV=(--env "$SEED_KV"); log_detail "seed:    $SEED_KV (mode=$SEED_MODE)" ;;
+    3) : ;; # protocol declares no seed after all
+    *) log_fail "seed derivation failed (exit $SEED_RC)"; exit 1 ;;
+  esac
+fi
+
 run_in_sandbox() {
   bash "$SCRIPT_DIR/run_in_sandbox.sh" \
     --workdir "$WORKDIR" \
@@ -183,6 +202,7 @@ run_in_sandbox() {
     --pids "$PIDS" \
     --network "$SBX_NETWORK" \
     --image "$IMAGE" \
+    "${SEED_ENV[@]+"${SEED_ENV[@]}"}" \
     -- "$@"
 }
 
