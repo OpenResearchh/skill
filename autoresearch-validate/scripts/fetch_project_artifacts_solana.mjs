@@ -151,49 +151,67 @@ async function downloadById({ gatewayUrl, id, hash, name, filePath, skipExisting
   };
 }
 
-function run(cmd, args) {
-  const result = spawnSync(cmd, args, { stdio: "inherit", text: true });
-  if (result.status !== 0) {
-    throw new Error(`${cmd} ${args.join(" ")} failed`);
-  }
-}
-
 // Security control for the Irys fallback: a tar member may name an absolute or
 // parent-relative path, or be a symlink or device node, and extraction would
-// then write outside the harness directory on the verifier host. Reject the
-// archive before `tar -xf` ever sees it. Git mode does not go through here —
-// the tree hash rejects symlink-escape and non-blob entries at their own layer.
-function assertSafeTarArchive(tarPath) {
+// then write outside the harness directory on the verifier host. Inspect every
+// entry and copy file/dir members ourselves — never hand the archive to `tar -xf`.
+export function extractSafeTarArchive(tarPath, destDir) {
   const code = String.raw`
 import os
 import sys
 import tarfile
 
-tar_path = sys.argv[1]
+tar_path, dest = sys.argv[1], os.path.abspath(sys.argv[2])
+os.makedirs(dest, exist_ok=True)
 
 def bad_path(name):
+    if not name:
+        return True
     normalized = name.replace("\\", "/")
-    if normalized.startswith("/") or normalized == "":
+    if normalized.startswith("/") or (len(normalized) >= 2 and normalized[1] == ":"):
         return True
     parts = [part for part in normalized.split("/") if part not in ("", ".")]
     return any(part == ".." for part in parts)
 
+def safe_join(root, name):
+    target = os.path.abspath(os.path.join(root, name))
+    if target != root and not target.startswith(root + os.sep):
+        raise SystemExit(f"unsafe tar path: {name}")
+    return target
+
 try:
     with tarfile.open(tar_path, "r:*") as archive:
+        members = []
         for member in archive.getmembers():
             if bad_path(member.name):
                 raise SystemExit(f"unsafe tar path: {member.name}")
+            if member.linkname and bad_path(member.linkname):
+                raise SystemExit(f"unsafe tar link: {member.linkname}")
             if not (member.isfile() or member.isdir()):
                 raise SystemExit(f"unsupported tar entry type: {member.name}")
+            safe_join(dest, member.name)
+            members.append(member)
+        for member in members:
+            target = safe_join(dest, member.name)
+            if member.isdir():
+                os.makedirs(target, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            src = archive.extractfile(member)
+            if src is None:
+                raise SystemExit(f"cannot read tar member: {member.name}")
+            with src, open(target, "wb") as out:
+                out.write(src.read())
 except (tarfile.TarError, OSError) as exc:
-    raise SystemExit(f"cannot inspect tar archive: {exc}")
+    raise SystemExit(f"cannot extract tar archive: {exc}")
 `;
-  const result = spawnSync("python3", ["-c", code, tarPath], {
+  const result = spawnSync("python3", ["-c", code, tarPath, destDir], {
     stdio: ["ignore", "ignore", "pipe"],
-    text: true,
+    encoding: "utf8",
   });
   if (result.status !== 0) {
-    const detail = (result.stderr || "").trim();
+    const raw = result.stderr;
+    const detail = (Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw || "")).trim();
     throw new Error(`unsafe benchmark.tar: ${detail || `python exited ${result.status}`}`);
   }
 }
@@ -495,8 +513,7 @@ async function main() {
     if (options.extractBenchmark) {
       harnessDir = path.join(outputDir, "harness");
       fs.mkdirSync(harnessDir, { recursive: true });
-      assertSafeTarArchive(artifacts.benchmark.path);
-      run("tar", ["-xf", artifacts.benchmark.path, "-C", harnessDir]);
+      extractSafeTarArchive(artifacts.benchmark.path, harnessDir);
     }
   }
 
@@ -522,10 +539,14 @@ async function main() {
   return 0;
 }
 
-main().then(
-  (code) => process.exit(code),
-  (err) => {
-    console.error(`fetch project artifacts failed: ${err.message}`);
-    process.exit(1);
-  },
-);
+const isMain =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  main().then(
+    (code) => process.exit(code),
+    (err) => {
+      console.error(`fetch project artifacts failed: ${err.message}`);
+      process.exit(1);
+    },
+  );
+}

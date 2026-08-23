@@ -170,10 +170,30 @@ function isZeroBytes32(value) {
   return bytes.length === 0 || bytes.every((b) => Number(b) === 0);
 }
 
-function incumbentAggregateScore(project) {
-  return isZeroBytes32(project.currentBestCodeIrysId)
-    ? BigInt(project.baselineAggregateScore.toString())
-    : BigInt(project.currentBestAggregateScore.toString());
+function nonzeroDigest(value) {
+  if (!value) return false;
+  if (typeof value === "string") {
+    const text = value.trim().toLowerCase().replace(/^0x/, "");
+    return /^[0-9a-f]+$/.test(text) && /[1-9a-f]/.test(text);
+  }
+  return !isZeroBytes32(value);
+}
+
+export function hasCurrentBestCode(project) {
+  if (!isZeroBytes32(project.currentBestCodeIrysId)) return true;
+  const nested = project.currentBest || project.currentBestCode;
+  if (nested && typeof nested === "object" && nonzeroDigest(nested.commit)) return true;
+  return nonzeroDigest(project.currentBestCommit) || nonzeroDigest(project.currentBestCodeCommit);
+}
+
+export function incumbentAggregateScore(project) {
+  const score = hasCurrentBestCode(project)
+    ? project.currentBestAggregateScore
+    : project.baselineAggregateScore;
+  if (score === undefined || score === null) {
+    throw new Error("project has no usable incumbent aggregate score");
+  }
+  return BigInt(score.toString());
 }
 
 function decimalMetricToScaledInt(text, scale = SCALE) {
@@ -587,8 +607,9 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, pro
   const bestScore = incumbentAggregateScore(project);
   const bips = Number(protocol?.measurement?.minScoreImprovementBips ?? 100);
   const threshold = improvementThreshold(bestScore, bips);
+  const improved = bips <= 0 ? verifiedScore > bestScore : verifiedScore >= threshold;
 
-  if (verifiedScore >= threshold) {
+  if (improved) {
     const uploaded = uploadIrys({ file: samplesPath, role: "verifierMetrics", options });
     const approve = await settle({
       action: "approve",
@@ -798,10 +819,14 @@ async function main() {
   }
 }
 
-main().then(
-  (code) => process.exit(code),
-  (err) => {
-    console.error(`solana validate loop failed: ${err.message}`);
-    process.exit(1);
-  },
-);
+const isMain =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  main().then(
+    (code) => process.exit(code),
+    (err) => {
+      console.error(`solana validate loop failed: ${err.message}`);
+      process.exit(1);
+    },
+  );
+}
