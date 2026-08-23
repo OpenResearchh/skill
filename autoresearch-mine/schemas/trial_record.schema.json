@@ -38,6 +38,49 @@
     "git_head_after": { "type": ["string", "null"] },
     "harness_exit_code": { "type": "integer" },
     "error": { "type": "string" },
-    "hypothesis": { "type": "string" }
+    "hypothesis": { "type": "string" },
+    "hypothesis_branch": { "type": "string" },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner": { "type": "string" },
+        "repo": { "type": "string" },
+        "base_branch": { "type": "string" },
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{40}$"
+        },
+        "head_branch": { "type": "string" },
+        "head_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{40}$"
+        },
+        "pr_number": { "type": ["integer", "null"], "minimum": 1 },
+        "pr_url": { "type": ["string", "null"] }
+      }
+    },
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "proposal_id": { "type": ["integer", "string"] },
+        "stake": { "type": "string" },
+        "reward_recipient": { "type": "string" },
+        "status": { "type": "string" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code_cid": { "type": ["string", "null"] },
+        "code_hash": { "type": "string" },
+        "benchmark_log_cid": { "type": ["string", "null"] },
+        "benchmark_log_hash": { "type": "string" }
+      }
+    },
+    "pr_eligible": { "type": "boolean" },
+    "failure_reason": { "type": ["string", "null"] }
   }
 }

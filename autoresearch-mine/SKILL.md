@@ -58,6 +58,9 @@ The exact CLI install command, identity generation, funding source, balance chec
 - Do **not** ask the miner between trials; stop only on limits, PR success (optional), or fatal errors.
 - Optional env shortcuts: **`AUTORESEARCH_PROTOCOL`**, **`AUTORESEARCH_REPO_ROOT`** (document paths once at start).
 - If the user identifies the project by **project id** rather than handing over local files, run **`bootstrap_project.mjs`** first to resolve, download, and verify the mining inputs.
+- For GitHub-distributed projects, prefer the proposal-first bridge flow:
+  mine on a hypothesis branch, submit the proposal with GitHub/CID binding
+  metadata, then open a PR with `--require-proposal --proposal-json`.
 
 ### Env fallbacks (outer loop only; protocol `miningLoop` wins when set)
 
@@ -136,6 +139,7 @@ Optional **AXL sidechat** writes miner-to-miner field notes to **`sidechat.jsonl
 | `references/workflow.md` | Phase 1 to Phase 2 workflow diagram and limits/frontier notes. |
 | `references/contracts-sync.md` | Maintainer instructions for refreshing vendored deployment + ABI artifacts from `autoresearch-create`. |
 | `references/vendor-harness.md` | Maintainer instructions for refreshing vendored harness scripts from `autoresearch-create`. |
+| `references/github-verification-bridge.md` | Proposal-first GitHub PR binding, CI verification result shape, and settlement bridge semantics. |
 | `references/onchain-mining-solana.md` | Miner setup, artifact download, and proposal-submit detail for the `solana` layer. |
 | `references/onchain-mining-0g.md` | Miner setup, hash rules, and submit order for the `0g` layer. |
 | `vendor/harness/` | Vendored `run_baseline.sh`, `run_measured_trials.sh`, `aggregate_samples.py`, `derive_trial_seed.py`, `_log.sh`, `_log.py`, `preview_metrics.py` trial harness. |
@@ -146,6 +150,7 @@ Optional **AXL sidechat** writes miner-to-miner field notes to **`sidechat.jsonl
 | `scripts/read_mining_limits.py` | Print `max_trials`, `max_session_wall_seconds`, `max_stagnant_trials`, `stop_after_pr`, and optionally **`on_chain_project_id`** (if `miningLoop.onChainProjectId` or **`ARAH_PROJECT_ID`** is set). |
 | `scripts/init_mine_workspace.sh` | Create `.autoresearch/mine` tree. |
 | `scripts/bootstrap_repo.sh` | Clone or reuse repo from protocol `meta.repo`. |
+| `scripts/prepare_hypothesis_branch.sh` | Create a dedicated branch for one mining hypothesis before editing. |
 | `scripts/env_utils.py` | Load `.env` from the current working directory and provide the default stake. |
 | `scripts/run_trial.sh` | Repeated-sample harness run → `run_measured_trials.sh`; per-trial logs and `samples.json` under `runs/<trial_id>/`. |
 | `scripts/append_trial_record.py` | Append one validated JSON line to `trials.jsonl`. |
@@ -159,8 +164,9 @@ Optional **AXL sidechat** writes miner-to-miner field notes to **`sidechat.jsonl
 | `scripts/commit_improvement.sh` | `git add` allowed paths + commit with fixed message. |
 | `scripts/prepare_pr_branch.sh` | `git checkout -B mine/<bundle>/<date>-<trial>`. |
 | `scripts/validate_network_state.sh` | Check `network_state.json` vs protocol. |
-| `scripts/open_pr_with_evidence.sh` | `gh pr create` after guard checks (`_open_pr_evidence.py`). |
+| `scripts/open_pr_with_evidence.sh` | `gh pr create` after metric and optional proposal-binding guard checks (`_open_pr_evidence.py`). |
 | `schemas/trial_record.schema.json` | Trial row shape. |
+| `schemas/github_bound_proposal.schema.json` | Machine-readable PR/proposal binding embedded in GitHub PR bodies. |
 | `schemas/sidechat_message.schema.json` | Optional AXL side conversation row shape. |
 | `schemas/network_state.schema.json` | `network_state.json` shape (manual or synced). |
 | `requirements-chain.txt` | Python deps used by the settlement adapters only. |
@@ -344,6 +350,20 @@ of file bytes) and metric scale.
 ./open_pr_with_evidence.sh /path/to/repo /path/to/protocol.json /path/to/repo/.autoresearch/mine/trials.jsonl
 # or --allow-local-only-pr when network_best_metric is null (see prompts/pr_gate.md)
 ```
+
+For proposal-first GitHub verification, open the PR only after
+`submit_trial_proposal.py` writes `submission.json`:
+
+```bash
+./open_pr_with_evidence.sh \
+  --require-proposal \
+  --proposal-json /path/to/repo/.autoresearch/mine/submissions/<trial_id>/submission.json \
+  /path/to/repo /path/to/protocol.json \
+  /path/to/repo/.autoresearch/mine/trials.jsonl
+```
+
+The PR body includes an `openresearch-proposal` JSON block that GitHub Actions
+and the settlement bridge parse directly.
 
 ### 9. Optional AXL sidechat
 
