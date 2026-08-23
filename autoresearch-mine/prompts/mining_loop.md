@@ -14,15 +14,15 @@ You run the **outer mining loop** without asking the human between trials.
 
 ## Each iteration
 
-1. Propose a hypothesis; edit **only** paths allowed by `mutableSurface.allowedGlobs` in `protocol.json` (see `program.md` “What you CAN do”).
+1. Propose a hypothesis. For GitHub-distributed projects, create or switch to a dedicated hypothesis branch with `prepare_hypothesis_branch.sh <protocol.json> <repo_root> <trial_id> <hypothesis_slug>` before editing. Edit **only** paths allowed by `mutableSurface.allowedGlobs` in `protocol.json` (see `program.md` “What you CAN do”).
 2. Record `git_head_before` from `git rev-parse HEAD` in `repo_root`.
 3. Run `run_trial.sh <protocol.json> <repo_root> <trial_id>` from `autoresearch-mine/scripts/`.
 4. Parse **`BASELINE_METRIC=<float>`** from the script stdout on success (same token as `run_baseline.sh`).
 5. If mining against a legacy 0G on-chain project, refresh **`network_state.json`** again with **`sync_registry_frontier.py`** immediately before comparing; this avoids submitting against stale registry state. For Solana projects, keep using the manual/local frontier until `sync_solana_frontier` exists.
 6. Compare numerically using **`compare_metric.py`** — never compare floats in prose.
 7. If improved vs last local best: run `commit_improvement.sh <protocol.json> <repo_root> <trial_id> <before> <after>`; else run `revert_mutable_surface.sh <protocol.json> <repo_root>`.
-8. If the metric beats `network_state.network_best_metric` after the fresh sync on a legacy 0G project, create the on-chain proposal immediately. Call **`submit_trial_proposal.py`** with `--wallet-id <id>`, `--project-id` or `--token-address`, `--repo-root`, `--trial-id`, `--claimed-metric`, `--reward-recipient` (the user's main wallet, not the mining keystore), and `--auto-buy`. Pass `--passphrase-file <path>` if the keystore passphrase is not in the environment. Only pass `--stake` when overriding `ARAH_STAKE` / the default stake of `1`. Pass `--budget 0.05og` (or similar) to cap how much native gas `--auto-buy` may spend on the bonding curve. For Solana projects, upload the code archive and benchmark log to Irys first, then call **`submit_trial_proposal.py --chain solana`** with `--project-id`, `--solana-keypair`, `--solana-code-irys-id`, `--solana-benchmark-log-irys-id`, `--reward-recipient`, and `--yes`. The Solana submitter checks the miner project-token balance and calls `buy()` with native SOL for missing stake before `submit`; pass `--solana-buy-lamports` only to override the quote. Use the dry-run flags first when validating account maps.
-9. Build a JSON object for **`append_trial_record.py`** (see `prompts/results_logging.md`) and append one line to `trials.jsonl`.
+8. If the metric beats `network_state.network_best_metric` after the fresh sync on a legacy 0G project, create the on-chain proposal immediately. Call **`submit_trial_proposal.py`** with `--wallet-id <id>`, `--project-id` or `--token-address`, `--repo-root`, `--trial-id`, `--claimed-metric`, `--reward-recipient` (the user's main wallet, not the mining keystore), and `--auto-buy`. Pass `--passphrase-file <path>` if the keystore passphrase is not in the environment. Only pass `--stake` when overriding `ARAH_STAKE` / the default stake of `1`. Pass `--budget 0.05og` (or similar) to cap how much native gas `--auto-buy` may spend on the bonding curve. For Solana projects, upload the code archive and benchmark log to Irys first, then call **`submit_trial_proposal.py --chain solana`** with `--project-id`, `--solana-keypair`, `--solana-code-irys-id`, `--solana-benchmark-log-irys-id`, `--reward-recipient`, and `--yes`. For GitHub-distributed projects, also pass `--github-owner`, `--github-repo`, `--github-base-branch`, `--github-base-sha`, `--github-head-branch`, `--github-head-sha`, `--code-cid`, and `--benchmark-log-cid` when available so `submission.json` can bind the future PR to the proposal. The Solana submitter checks the miner project-token balance and calls `buy()` with native SOL for missing stake before `submit`; pass `--solana-buy-lamports` only to override the quote. Use the dry-run flags first when validating account maps.
+9. Build a JSON object for **`append_trial_record.py`** (see `prompts/results_logging.md`) and append one line to `trials.jsonl`. Include `hypothesis_branch`, `github`, `proposal`, `artifacts`, `pr_eligible`, and `failure_reason` when known.
 10. If **`ARAH_AXL_ENABLED=1`**, broadcast the latest trial with `axl_sidechat_send.py --record-file <repo_root>/.autoresearch/mine/trials.jsonl --peers "$ARAH_AXL_PEERS"`.
 
 ## AXL sidechat rules
@@ -43,3 +43,18 @@ Do **not** override `execution.hardTimeoutSeconds` or `execution.stopCondition`.
 - Successful PR when `stop_after_pr` is true (after `open_pr_with_evidence.sh` exits 0)
 - Successful on-chain proposal submit for a registry-best improvement, unless the user explicitly configured the run to continue mining after submit
 - Unrecoverable script failure (report once and exit)
+
+## GitHub-bound PR creation
+
+For proposal-first GitHub flow, open the PR only after `submit_trial_proposal.py`
+writes `.autoresearch/mine/submissions/<trial_id>/submission.json`:
+
+```bash
+open_pr_with_evidence.sh \
+  --require-proposal \
+  --proposal-json <repo_root>/.autoresearch/mine/submissions/<trial_id>/submission.json \
+  <repo_root> <protocol.json> <trial_json_or_trials.jsonl>
+```
+
+The PR body includes an `openresearch-proposal` JSON block. GitHub Actions and
+the settlement bridge must parse that block rather than scraping prose.

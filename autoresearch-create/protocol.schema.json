@@ -452,6 +452,26 @@
         "stagingExample": { "type": "string" }
       }
     },
+    "GitHubVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional GitHub-first verification hints for projects that use PRs and Actions as the coordination layer.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "requiredChecks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "GitHub check names that must pass before settlement-backed merge."
+        },
+        "metadataBlock": {
+          "type": "string",
+          "default": "openresearch-proposal",
+          "description": "Fenced code block info string containing GitHubBoundProposal JSON in PR bodies."
+        },
+        "autoMerge": { "type": "boolean", "default": false },
+        "proposalFirst": { "type": "boolean", "default": true }
+      }
+    },
     "Provenance": {
       "type": "object",
       "additionalProperties": false,
@@ -459,6 +479,7 @@
       "properties": {
         "resultsLog": { "$ref": "#/$defs/ResultsLog" },
         "gitWorkflow": { "$ref": "#/$defs/GitWorkflow" },
+        "githubVerification": { "$ref": "#/$defs/GitHubVerification" },
         "baselineArtifactPath": {
           "type": "string",
           "description": "Optional path to stored baseline log for phase-2 handoff."

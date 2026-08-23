@@ -42,6 +42,8 @@ HARD_DENY = [
     ".idea/runConfigurations/**",
 ]
 
+GITHUB_WORKFLOW_DENY = ".github/workflows/**"
+
 
 def match_any(path: str, globs: list[str]) -> bool:
     path_f = path.replace("\\", "/")
@@ -65,7 +67,15 @@ def load_red_flag_patterns(path: Path) -> list[re.Pattern[str]]:
     return pats
 
 
-def iter_files(root: Path):
+def iter_files(root: Path, paths: list[str] | None = None):
+    if paths is not None:
+        for rel in paths:
+            if rel.startswith(".git/"):
+                continue
+            p = root / rel
+            if p.is_file():
+                yield rel, p
+        return
     for p in root.rglob("*"):
         if p.is_file():
             rel = p.relative_to(root).as_posix()
@@ -79,6 +89,16 @@ def main() -> int:
     ap.add_argument("--protocol", type=Path, required=True)
     ap.add_argument("--repo-root", type=Path, required=True)
     ap.add_argument("--red-flags-file", type=Path, default=DEFAULT_RED_FLAGS)
+    ap.add_argument(
+        "--allow-github-workflows",
+        action="store_true",
+        help="Allow existing .github/workflows files. Use only after a diff gate has rejected PR changes to workflow files.",
+    )
+    ap.add_argument(
+        "--paths-file",
+        type=Path,
+        help="Optional newline-delimited list of repository-relative files to scan instead of the full tree.",
+    )
     args = ap.parse_args()
     proto = json.loads(args.protocol.read_text(encoding="utf-8"))
     ms = proto.get("mutableSurface") or {}
@@ -90,6 +110,8 @@ def main() -> int:
     extra = os.environ.get("ARAH_EXTRA_PERMIT_GLOBS")
     if extra:
         permit.extend([x.strip() for x in extra.split(":") if x.strip()])
+    if args.allow_github_workflows:
+        permit.append(GITHUB_WORKFLOW_DENY)
     red_patterns = load_red_flag_patterns(args.red_flags_file) if args.red_flags_file.is_file() else []
 
     root = args.repo_root.resolve()
@@ -97,9 +119,21 @@ def main() -> int:
         print("repo root not found", file=sys.stderr)
         return 2
 
+    scan_paths = None
+    if args.paths_file:
+        scan_paths = [
+            line.strip()
+            for line in args.paths_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    hard_deny = [
+        pattern
+        for pattern in HARD_DENY
+        if not (args.allow_github_workflows and pattern == GITHUB_WORKFLOW_DENY)
+    ]
     text_suffixes = {".py", ".sh", ".md", ".txt", ".c", ".h", ".cpp", ".cc", ".rs", ".toml", ".yaml", ".yml", ".json"}
-    for rel, p in iter_files(root):
-        if match_any(rel, HARD_DENY):
+    for rel, p in iter_files(root, scan_paths):
+        if match_any(rel, hard_deny):
             print(f"hard-denied path: {rel}", file=sys.stderr)
             return 3
         if match_any(rel, forbidden):

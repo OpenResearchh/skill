@@ -1,6 +1,24 @@
 # autoresearch-mine
 
-Mining starts from either a finalized local `protocol.json` plus repo checkout, a Solana OpenResearch project id / Irys manifest, or a legacy on-chain 0G project id / ProjectToken address.
+Mining starts from either a GitHub-distributed project, a finalized local
+`protocol.json` plus repo checkout, a Solana OpenResearch project id / Irys
+manifest, or a legacy on-chain 0G project id / ProjectToken address.
+
+For GitHub-distributed projects, the preferred v1 flow is proposal-first:
+
+1. Clone the GitHub repository in a sandboxed mining workspace.
+2. Run the protocol setup and baseline benchmark.
+3. Create hypothesis branches with `scripts/prepare_hypothesis_branch.sh`.
+4. Record every completed trial in `.autoresearch/mine/trials.jsonl`,
+   including failures that may be useful later.
+5. For a winning branch, submit the proposal with GitHub binding flags so
+   `submission.json` records owner, repo, base SHA, head SHA, stake, CIDs, and
+   artifact hashes.
+6. Open the PR with `open_pr_with_evidence.sh --require-proposal --proposal-json
+   <submission.json>` so GitHub Actions can verify the exact same candidate.
+
+The PR body contains a machine-readable `openresearch-proposal` JSON block. See
+[`references/github-verification-bridge.md`](references/github-verification-bridge.md).
 
 For Solana projects, finish CLI and wallet setup before mining so a winning trial can be proposed without another prompt. If `solana --version` is missing, install it locally with the official Solana installer, create or reuse a dedicated miner keypair, ask the user to fund that public key from the faucet, and ask only for the reward-recipient Solana address:
 

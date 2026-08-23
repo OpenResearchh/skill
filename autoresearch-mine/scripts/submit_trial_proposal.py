@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -46,6 +47,33 @@ def create_code_archive(repo_root: Path, output: Path) -> None:
     run(["git", "archive", "--format=tar", "--output", str(output), "HEAD"], cwd=repo_root, git=True)
 
 
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def maybe_github_binding(args: argparse.Namespace, *, head: str) -> dict[str, object] | None:
+    fields = {
+        "owner": args.github_owner,
+        "repo": args.github_repo,
+        "base_branch": args.github_base_branch,
+        "base_sha": args.github_base_sha,
+        "head_branch": args.github_head_branch,
+        "head_sha": args.github_head_sha or head,
+        "pr_number": args.github_pr_number,
+        "pr_url": args.github_pr_url,
+    }
+    if not any(v is not None for v in fields.values()):
+        return None
+    missing = [k for k in ("owner", "repo", "base_branch", "base_sha", "head_branch", "head_sha") if not fields[k]]
+    if missing:
+        raise ValueError(f"GitHub proposal binding is incomplete; missing: {', '.join(missing)}")
+    return fields
+
+
 def main() -> int:
     load_dotenv_from_cwd()
 
@@ -78,6 +106,16 @@ def main() -> int:
     parser.add_argument("--solana-benchmark-log-irys-id", help="Irys id for the submitted benchmark log.")
     parser.add_argument("--solana-buy-lamports", help="Override lamports sent to Solana buy() when stake tokens are missing.")
     parser.add_argument("--solana-buy-slippage-bps", help="Slippage added to the quoted Solana missing-stake buy.")
+    parser.add_argument("--github-owner", help="GitHub owner/org for proposal-first PR binding.")
+    parser.add_argument("--github-repo", help="GitHub repository name for proposal-first PR binding.")
+    parser.add_argument("--github-base-branch", help="GitHub base branch the miner started from.")
+    parser.add_argument("--github-base-sha", help="GitHub base commit SHA the miner started from.")
+    parser.add_argument("--github-head-branch", help="GitHub miner branch containing the candidate.")
+    parser.add_argument("--github-head-sha", help="GitHub candidate head SHA. Defaults to git HEAD.")
+    parser.add_argument("--github-pr-number", type=int, help="GitHub PR number, normally filled after PR creation.")
+    parser.add_argument("--github-pr-url", help="GitHub PR URL, normally filled after PR creation.")
+    parser.add_argument("--code-cid", help="Content-addressed id for the submitted code snapshot.")
+    parser.add_argument("--benchmark-log-cid", help="Content-addressed id for the submitted benchmark log.")
     parser.add_argument(
         "--solana-allow-missing-irys-ids",
         action="store_true",
@@ -112,6 +150,7 @@ def main() -> int:
         submission_dir = repo_root / ".autoresearch" / "mine" / "submissions" / args.trial_id
         code_tar = submission_dir / "repo-snapshot.tar"
         create_code_archive(repo_root, code_tar)
+        github_binding = maybe_github_binding(args, head=head)
 
         if args.chain == "solana":
             cmd = [
@@ -205,6 +244,19 @@ def main() -> int:
             "reward_recipient": args.reward_recipient,
             "chain": args.chain,
             "dry_run": args.dry_run,
+            "github": github_binding,
+            "proposal": {
+                "proposal_id": args.solana_proposal_id,
+                "stake": args.stake,
+                "reward_recipient": args.reward_recipient,
+                "status": "submitted" if not args.dry_run else "unknown",
+            },
+            "artifacts": {
+                "code_cid": args.code_cid or args.solana_code_irys_id,
+                "code_hash": sha256_file(code_tar),
+                "benchmark_log_cid": args.benchmark_log_cid or args.solana_benchmark_log_irys_id,
+                "benchmark_log_hash": sha256_file(trial_log),
+            },
             "submit_output": result.stdout,
         }
         (submission_dir / "submission.json").write_text(json.dumps(submission, indent=2) + "\n", encoding="utf-8")
@@ -215,6 +267,9 @@ def main() -> int:
         if e.stdout:
             print(e.stdout, file=sys.stderr, end="")
         return e.returncode or 1
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
     except OSError as e:
         print(str(e), file=sys.stderr)
         return 1

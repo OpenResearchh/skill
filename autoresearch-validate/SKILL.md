@@ -5,7 +5,11 @@ description: Verify OpenResearch mining proposals and settle them. Resolve code 
 
 # autoresearch-validate
 
-Operate an **unattended verifier** over published projects. This skill **does not** watch GitHub PRs; every outcome is settled on the project's settlement layer.
+Operate an **unattended verifier** over published projects. The default loop
+settles directly on the project's settlement layer. For GitHub-distributed
+projects, the skill also ships a GitHub Actions verifier and a chain-neutral
+settlement bridge: PR jobs emit `verification-result.json`, then a trusted
+bridge identity turns that result into settlement.
 
 When the user says something like **"start autoresearch validating `<project>`"**,
 treat `<project>` as the project reference, resolve it, print the project
@@ -134,6 +138,10 @@ Initialize with **`scripts/init_verify_workspace.sh <repo_root>`**.
 | `scripts/append_review_record.py` | Append one review row to `.autoresearch/verify/reviews.jsonl` |
 | `scripts/metrics_hash.py` | SHA-256 → 32-byte hex |
 | `scripts/parse_baseline_metric.py` | Parse `BASELINE_METRIC=` from a harness log |
+| `scripts/github_verify_pr.py` | GitHub CI verifier: parse `openresearch-proposal`, verify head SHA and code hash, run static gates, optionally rerun benchmark, and emit `verification-result.json`. |
+| `scripts/settlement_bridge.py` | Chain-neutral bridge from `verification-result.json` to an explicit settlement plan. Adapter-specific transaction submission is kept outside untrusted PR jobs. |
+| `schemas/verification_result.schema.json` | Structured GitHub CI verification result consumed by settlement automation. |
+| `templates/openresearch-github-verifier.yml` | Workflow template to copy into mined project repositories as `.github/workflows/openresearch-github-verifier.yml`. Do not install it as an active workflow in this skills repository. |
 | `references/onchain-verify-solana.md` | Verifier setup, artifact resolution, and settlement detail for the `solana` layer |
 | `references/onchain-verify-0g.md` | Verifier setup, hash + economics notes, and the legacy pipeline ordering for the `0g` layer |
 | `references/onchain-mining-0g.md` | Miner submit-path context needed when interpreting `0g` proposals |
@@ -234,7 +242,7 @@ each step; the reference doc for the active layer records those differences.
 
 ## Out of scope
 
-TEE attestation automation, artifact-storage upload daemons (operators supply **`ARAH_ARTIFACT_INDEX`** where the layer needs one), GitHub PR merges.
+TEE attestation automation, artifact-storage upload daemons (operators supply **`ARAH_ARTIFACT_INDEX`** where the layer needs one), direct secret-bearing settlement from untrusted PR jobs, and automatic GitHub PR merges without a trusted bridge.
 
 ## Final response
 
