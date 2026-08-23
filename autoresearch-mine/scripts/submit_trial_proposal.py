@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from _git_safe import GIT_SAFE_ENV  # noqa: E402
+import chain as chain_mod  # noqa: E402
 from env_utils import env_or_default_stake, load_dotenv_from_cwd  # noqa: E402
 
 
@@ -59,7 +60,9 @@ def main() -> int:
     parser.add_argument("--claimed-metric", required=True)
     parser.add_argument("--stake", default=env_or_default_stake())
     parser.add_argument("--reward-recipient", required=True)
-    parser.add_argument("--chain", choices=("0g", "solana"), default=os.environ.get("ARAH_CHAIN", "0g"))
+    # Resolved after parsing so this shares one order with the Node entrypoints;
+    # a default here would shadow .autoresearch/chain.json.
+    parser.add_argument("--chain", choices=chain_mod.SUPPORTED_CHAINS, default=None)
     parser.add_argument("--wallet-id", help="0G mining wallet keystore id (scripts/wallet.py).")
     parser.add_argument("--passphrase-file", help="Path to a file with the wallet passphrase.")
     parser.add_argument("--metric-scale", type=int, default=int(os.environ.get("ARAH_METRIC_SCALE", "1000000")))
@@ -83,6 +86,12 @@ def main() -> int:
     parser.add_argument("--yes", action="store_true", help="Confirm live Solana transaction submission.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    try:
+        args.chain = chain_mod.resolve_chain(args.chain, args.repo_root)
+    except ValueError as exc:
+        parser.error(str(exc))
+    chain_mod.chain_detail(f"submit proposal via {args.chain} adapter")
 
     if args.chain == "0g" and not args.wallet_id:
         parser.error("--wallet-id is required for --chain 0g")

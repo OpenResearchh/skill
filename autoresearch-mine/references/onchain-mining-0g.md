@@ -1,6 +1,56 @@
 # 0G Galileo — miner path (excerpt)
 
+This is the reference for the `0g` settlement layer. Select it with
+`--chain 0g`, `ARAH_CHAIN=0g`, or `.autoresearch/chain.json`.
+
+The workflow calls the neutral entrypoints, which delegate here:
+
+| Neutral entrypoint | Adapter | Flag translation |
+|---|---|---|
+| `scripts/bootstrap_project.mjs` | `scripts/bootstrap_from_registry.py` | `--prepare-repo` → `--download-artifacts` |
+| `scripts/submit_trial_proposal.py --chain 0g` | `scripts/submit_proposal.py` | identity is `--wallet-id` (+ `--passphrase-file`) |
+
+Every adapter flag below can be passed straight through `bootstrap_project.mjs`
+unchanged — including `--token-address`, `--protocol-json`, `--repo-root`, and
+`--skip-existing`.
+
 This file distills the **miner submit path** from [`autoresearch-create/references/onchain-0g-galileo.md`](../../autoresearch-create/references/onchain-0g-galileo.md). Use that doc for full deployment tables and publish (`createProject`) flow.
+
+## Identity and funding on this layer
+
+The signing identity is an isolated mining wallet in a passphrase-encrypted
+keystore under `~/.autoresearch/wallets/<id>.json` (`ARAH_WALLET_HOME` to
+relocate):
+
+```bash
+python3 scripts/wallet.py init --id project-42       # generates a fresh secp256k1 key
+python3 scripts/wallet.py address --id project-42    # print the address; the user funds it from their main wallet
+```
+
+Scripts that send transactions take **`--wallet-id`** + **`--passphrase-file`**
+(or `ARAH_WALLET_PASSPHRASE`). They never read `ARAH_PRIVATE_KEY`, and the
+keystore is decrypted only inside `wallet.py` itself, so the trial harness —
+which runs untrusted code inside the sandbox — cannot reach the key. The dotenv
+loader explicitly skips `ARAH_PRIVATE_KEY` even if it is present in `.env`.
+
+Then preflight the wallet so it has native gas and either enough `ProjectToken`
+stake or enough native balance to buy the missing stake automatically:
+
+```bash
+python3 scripts/check_wallet.py \
+  --wallet-id project-42 \
+  --token-address 0xProjectTokenAddress
+# or: --project-id "${ARAH_PROJECT_ID:?}"
+```
+
+If `ready` is false, stop and report the missing gas/token/stake condition
+before spending compute on trials. If `missingStake` is nonzero and
+`canAutoBuyMissingStake` is true, continue and submit later with
+**`--auto-buy`**. A low allowance is reported as `needsApproval`; it is not
+fatal because `submit_proposal.py` sends `approve()` itself.
+
+Keep `--reward-recipient` set to the user's main wallet (e.g. their MetaMask
+address), never the mining keystore address.
 
 ## Deployment layout
 
@@ -15,7 +65,7 @@ This file distills the **miner submit path** from [`autoresearch-create/referenc
 
 ## Miner transaction order
 
-0. **Wallet preflight:** `ARAH_PRIVATE_KEY` must derive the miner EVM address that will pay gas, buy missing stake, approve the ledger, and submit. Scripts load `.env` from the current working directory, so if the key is missing ask the user to create `.env` with `ARAH_PRIVATE_KEY=0x...` and optional `ARAH_STAKE=1` (whole tokens; ProjectToken `decimals() == 0`, so the contract only requires `stake > 0`). Run **`scripts/check_wallet.py`** with `--project-id` or `--token-address` before starting the mining loop.
+0. **Wallet preflight:** see [Identity and funding on this layer](#identity-and-funding-on-this-layer) above. The keystore identity pays gas, buys missing stake, approves the ledger, and submits. `ARAH_STAKE` sets the stake count in whole tokens (`ProjectToken.decimals() == 0`, so the contract only requires `stake > 0`); it defaults to `1`.
 1. **`ProjectRegistry.tokenOf(projectId)`** → project token address. If the miner only has a token address, scan `tokenOf(0..nextProjectId-1)` to recover `projectId`.
 2. **`ProjectToken.balanceOf(wallet)`** and **`allowance(wallet, ProposalLedger)`** → check stake readiness.
 3. **`ProjectToken.costBetween(totalSupply, totalSupply + missingStake)`** → quote the native value needed to buy missing stake.
@@ -44,7 +94,19 @@ python3 scripts/bootstrap_from_registry.py \
 
 This downloads `protocol.json`, `repo-snapshot.tar`, `benchmark.tar`, and `baseline-metrics.log`, verifies each 0G Merkle root, unpacks the repo snapshot, initializes `.autoresearch/mine`, and writes registry frontier state.
 
-If the project was published with plain SHA-256 file hashes, the registry proves integrity but does not provide retrievable storage roots. In that case, supply the local protocol and repo checkout to `bootstrap_from_registry.py` without `--download-artifacts`.
+If the project was published with plain SHA-256 file hashes, the registry proves integrity but does not provide retrievable storage roots. In that case, supply the local protocol and repo checkout and omit `--download-artifacts` (i.e. call `bootstrap_project.mjs` without `--prepare-repo`):
+
+```bash
+python3 scripts/bootstrap_from_registry.py \
+  --token-address 0xProjectTokenAddress \
+  --protocol-json /path/to/protocol.json \
+  --repo-root /path/to/repo \
+  --output-dir /tmp/arah-mine/my-project
+```
+
+`bootstrap_from_registry.py` resolves project metadata and initializes an existing protocol/repo checkout without Node deps; Node deps (`npm install` from the skill root) are only required for `--download-artifacts`.
+
+Either way it writes `bootstrap_result.json`, initializes `.autoresearch/mine`, and prints the resolved `protocolJson` and `repoRoot`.
 
 ## Automatic buy / approve / submit
 
@@ -53,6 +115,20 @@ If the project was published with plain SHA-256 file hashes, the registry proves
 Use `--dry-run` to print unsigned transactions after RPC resolution, or `--print-only` to verify local hashes and metric scaling without RPC (requires `--project-id`).
 
 For normal mining, agents should call **`scripts/submit_trial_proposal.py`** instead of assembling hashes by hand. It archives the committed winning repo state from `HEAD`, uses `.autoresearch/mine/runs/<trial_id>/stdout.log` as the benchmark log, and then calls `submit_proposal.py`. The trigger is automatic: if a completed trial beats the freshly synced `ProjectRegistry.currentBestAggregateScore(projectId)`, submit the proposal transaction immediately.
+
+```bash
+python3 scripts/submit_trial_proposal.py \
+  --chain 0g \
+  --wallet-id project-42 \
+  --token-address 0xProjectTokenAddress \
+  --repo-root /path/to/repo \
+  --trial-id <trial_id> \
+  --claimed-metric 1.23 \
+  --reward-recipient 0xUserMainWalletAddress \
+  --auto-buy
+```
+
+`--wallet-id` is required on this layer; `--project-id` may be used instead of `--token-address`. `submit_trial_proposal.py` reads `--chain` / `ARAH_CHAIN` only — it does not consult `.autoresearch/chain.json`, so pass `--chain 0g` explicitly.
 
 ## Out of scope here
 

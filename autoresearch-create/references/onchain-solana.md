@@ -1,5 +1,15 @@
 # Solana OpenResearch Publishing
 
+This is the reference for the `solana` settlement layer. The workflow calls
+`scripts/publish_project.mjs`; when `solana` is the active layer that entrypoint
+delegates to `scripts/publish_project_solana.mjs` and translates
+`--upload-artifacts` into `--upload-artifacts-to-irys`. Every other flag below
+can be passed straight through `publish_project.mjs`. Select this layer with
+`--chain solana`, `ARAH_CHAIN=solana`, or `.autoresearch/chain.json`; it is also
+the default when nothing is configured.
+
+`--base-price` and `--slope` are denominated in lamports on this layer.
+
 OpenResearch Solana program id:
 
 ```text
