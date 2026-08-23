@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/OpenResearchh/experiment-protocol/trace_record.schema.json",
+  "title": "MinerTraceRecord",
+  "description": "Opt-in, miner-owned agent trajectory for one trial. Written to .autoresearch/mine/traces/<trial_id>/trace.json by scripts/capture_trace.py. Capture is off by default; upload is a separate explicit command.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "trial_id",
+    "captured_at",
+    "agent",
+    "model",
+    "event_count",
+    "events",
+    "event_files",
+    "sha256",
+    "size_bytes",
+    "redaction",
+    "owner_pubkey",
+    "license",
+    "upload"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "trial_id": { "type": "string" },
+    "captured_at": { "type": "string", "format": "date-time" },
+    "finalized_at": { "type": ["string", "null"], "format": "date-time" },
+    "agent": {
+      "type": "string",
+      "description": "Free-form name of the coding agent that produced the session."
+    },
+    "agent_version": { "type": ["string", "null"] },
+    "model": {
+      "type": ["string", "null"],
+      "description": "Model identifier the miner attributes the replies to; null when unknown."
+    },
+    "protocol_bundle_id": { "type": ["string", "null"] },
+    "event_count": { "type": "integer", "minimum": 0 },
+    "events": {
+      "description": "Inline events. Empty when the bundle is referenced through event_files instead.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/traceEvent" }
+    },
+    "event_files": {
+      "description": "File refs for the on-disk bundle. The first entry is normally events.jsonl.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/eventFileRef" }
+    },
+    "sha256": {
+      "description": "Lowercase hex SHA-256 over the concatenated bytes of event_files in listed order (bundle hash).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "size_bytes": { "type": "integer", "minimum": 0 },
+    "redaction": { "$ref": "#/$defs/redactionSummary" },
+    "owner_pubkey": {
+      "description": "Miner-controlled public key asserted as owner of this trace. Solana base58 pubkey for the Solana path.",
+      "type": ["string", "null"]
+    },
+    "license": { "$ref": "#/$defs/license" },
+    "upload": { "$ref": "#/$defs/uploadStatus" },
+    "notes": { "type": "string" }
+  },
+  "$defs": {
+    "traceEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seq", "ts", "type", "text", "redactions"],
+      "properties": {
+        "seq": { "type": "integer", "minimum": 1 },
+        "ts": { "type": "string", "format": "date-time" },
+        "type": {
+          "type": "string",
+          "enum": ["prompt", "model_reply", "tool_call", "tool_result", "note"]
+        },
+        "role": { "type": ["string", "null"] },
+        "tool_name": { "type": ["string", "null"] },
+        "text": { "type": "string" },
+        "chars": { "type": "integer", "minimum": 0 },
+        "redactions": {
+          "description": "Count of pattern hits replaced in this event's text.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "redaction_labels": {
+          "description": "Per-pattern replacement counts for this event.",
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "metadata": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "eventFileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes"],
+      "properties": {
+        "path": {
+          "description": "Path relative to the trace directory.",
+          "type": "string"
+        },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "content_type": { "type": "string" }
+      }
+    },
+    "redactionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "patterns", "hits", "guarantee"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "patterns": {
+          "description": "Labels of the redaction patterns that were applied.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "hits": {
+          "description": "Total pattern matches replaced across all events.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "hits_by_pattern": {
+          "description": "Total replacements per pattern label across all events.",
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "residual_hits_by_pattern": {
+          "description": "Secret-shaped text still detectable in the stored bundle on the finalize re-scan. Normally empty; non-empty means the bundle needs manual review before any upload.",
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "guarantee": {
+          "description": "Always \"best-effort\": redaction is pattern matching and can miss secrets.",
+          "const": "best-effort"
+        }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "description": "SPDX license identifier chosen by the miner, or \"unlicensed-private\" to publish no reuse rights.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9.+-]*$"
+        },
+        "url": { "type": ["string", "null"] },
+        "notice": { "type": ["string", "null"] }
+      }
+    },
+    "uploadStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["local", "uploaded", "failed"]
+        },
+        "network": { "type": ["string", "null"], "enum": ["devnet", "mainnet", null] },
+        "irys_id": { "type": ["string", "null"] },
+        "gateway_uri": { "type": ["string", "null"] },
+        "uploaded_at": { "type": ["string", "null"], "format": "date-time" },
+        "artifact_role": { "type": ["string", "null"] },
+        "error": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
