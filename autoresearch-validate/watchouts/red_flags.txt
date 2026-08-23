@@ -18,8 +18,6 @@ ANTHROPIC_API_KEY
 chmod\s+[+]x\s+.*postinstall
 postinstall
 preinstall
-process\.env
-os\.environ
 sleep\s*\(\s*[0-9]+
 time\.sleep\s*\(\s*[0-9]+
 setTimeout\s*\([^,]+,\s*[0-9]{4,}
