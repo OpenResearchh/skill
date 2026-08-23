@@ -142,6 +142,18 @@ function statusName(status) {
   return String(status).toLowerCase();
 }
 
+function isZeroBytes32(value) {
+  if (!value) return true;
+  const bytes = Array.from(value);
+  return bytes.length === 0 || bytes.every((b) => Number(b) === 0);
+}
+
+function incumbentAggregateScore(project) {
+  return isZeroBytes32(project.currentBestCodeIrysId)
+    ? BigInt(project.baselineAggregateScore.toString())
+    : BigInt(project.currentBestAggregateScore.toString());
+}
+
 function decimalMetricToScaledInt(text, scale = SCALE) {
   const s0 = String(text).trim();
   const negative = s0.startsWith("-");
@@ -299,15 +311,15 @@ function uploadIrys({ file, role, options }) {
   return parseJsonOutput(result.stdout);
 }
 
-function findProtocolPath(extractRoot) {
-  const candidates = [
-    path.join(extractRoot, ".autoresearch", "publish", "protocol.json"),
-    path.join(extractRoot, "protocol.json"),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  throw new Error(`protocol.json not found in extracted proposal code: ${extractRoot}`);
+// Metric value a candidate must reach to count as an improvement over the
+// score the network already holds. The margin is relative to the incumbent's
+// magnitude, so it reads the same for a metric of 2.5 and one of 250000.
+function improvementThreshold(bestScore, bips) {
+  if (bips <= 0) return bestScore;
+  const magnitude = bestScore < 0n ? -bestScore : bestScore;
+  const margin = (magnitude * BigInt(bips)) / 10000n;
+  // Aggregate score is oriented so that greater is always better on-chain.
+  return bestScore + margin;
 }
 
 function evidenceFile(dir, name, payload) {
@@ -317,7 +329,7 @@ function evidenceFile(dir, name, payload) {
   return file;
 }
 
-async function verifyClaimedProposal({ solana, config, proposalId, proposal, options }) {
+async function verifyClaimedProposal({ solana, config, proposalId, proposal, project, options }) {
   const proposalDir = path.join(options.workDir, `proposal-${proposalId}`);
   fs.mkdirSync(proposalDir, { recursive: true });
   const reviewId = `solana-p${proposalId}-${Date.now()}`;
@@ -337,7 +349,25 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, opt
   const resolvePath = resolve.stdout.trim().split(/\n/).pop();
   const resolved = readJson(resolvePath);
   const extractRoot = resolved.extractRoot;
-  const protocolPath = findProtocolPath(extractRoot);
+
+  // Score against the project's own protocol and harness, fetched by the Irys
+  // ids on the Project account and hash-verified. Reading either from the
+  // submission would let whoever wrote the submission decide how it is judged.
+  const trustedDir = path.join(proposalDir, "trusted");
+  const fetchTrusted = runRequired("node", [
+    path.join(SCRIPT_DIR, "fetch_project_artifacts_solana.mjs"),
+    "--project-id",
+    proposal.projectId.toString(),
+    "--output-dir",
+    trustedDir,
+    "--extract-benchmark",
+    "--skip-existing",
+    ...(options.cluster ? ["--cluster", options.cluster] : []),
+    ...(options.rpcUrl ? ["--rpc-url", options.rpcUrl] : []),
+    ...(options.programId ? ["--program-id", options.programId] : []),
+  ], { capture: true });
+  const trusted = readJson(fetchTrusted.stdout.trim().split(/\n/).pop());
+  const protocolPath = trusted.protocolPath;
   const protocol = readJson(protocolPath);
   const direction = protocol?.measurement?.primaryMetric?.direction;
   if (direction !== "minimize" && direction !== "maximize") {
@@ -345,6 +375,58 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, opt
   }
 
   runRequired("bash", [path.join(SCRIPT_DIR, "init_verify_workspace.sh"), extractRoot]);
+
+  // Overwrite every immutable harness path in the submitted tree with the
+  // project's copy. Divergence on one of those paths is tampering.
+  const restore = run("python3", [
+    path.join(SCRIPT_DIR, "restore_trusted_harness.py"),
+    "--protocol",
+    protocolPath,
+    "--benchmark-dir",
+    trusted.harnessDir,
+    "--repo-root",
+    extractRoot,
+    "--report",
+    path.join(proposalDir, "harness-restore.json"),
+  ], { capture: true });
+  if (restore.status === 3) {
+    const ev = evidenceFile(proposalDir, "harness-tamper-reject.json", {
+      reason: "harness_tampered",
+      stdout: restore.stdout,
+      stderr: restore.stderr,
+    });
+    const uploaded = uploadIrys({ file: ev, role: "verifierRejectEvidence", options });
+    const reject = await settle({
+      action: "reject",
+      proposalId,
+      metricsFile: ev,
+      metricsIrysId: uploaded.id,
+      options,
+    });
+    const rejectOut = parseJsonOutput(reject.stdout);
+    if (rejectOut?.signature) txs.push(rejectOut.signature);
+    return {
+      result: "rejected",
+      reason: "harness_tampered",
+      stdoutLog: "",
+      verifiedScore: "",
+      error: restore.stderr || restore.stdout,
+      txs,
+    };
+  }
+  if (restore.status !== 0) {
+    const release = await settle({ action: "release-review", proposalId, options });
+    const releaseOut = parseJsonOutput(release.stdout);
+    if (releaseOut?.signature) txs.push(releaseOut.signature);
+    return {
+      result: "released",
+      reason: "harness_restore_failed",
+      stdoutLog: "",
+      verifiedScore: "",
+      error: restore.stderr || restore.stdout,
+      txs,
+    };
+  }
   const gates = run("python3", [
     path.join(SCRIPT_DIR, "verify_static_gates.py"),
     "--protocol",
@@ -384,48 +466,58 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, opt
     extractRoot,
     reviewId,
   ], { cwd: extractRoot, capture: true });
-  const stdoutLog = path.join(extractRoot, ".autoresearch", "verify", "runs", reviewId, "stdout.log");
+  const samplesPath = path.join(extractRoot, ".autoresearch", "verify", "runs", reviewId, "samples.json");
+  // Exit 4 means the sample was too dispersed to score. That is a property of
+  // this host, not evidence against the miner, so release rather than reject.
   if (runTrial.status !== 0) {
     const release = await settle({ action: "release-review", proposalId, options });
     const releaseOut = parseJsonOutput(release.stdout);
     if (releaseOut?.signature) txs.push(releaseOut.signature);
     return {
       result: "released",
-      reason: "harness_failed",
-      stdoutLog,
+      reason: runTrial.status === 4 ? "measurement_too_noisy" : "harness_failed",
+      stdoutLog: samplesPath,
       verifiedScore: "",
       error: runTrial.stderr || runTrial.stdout,
       txs,
     };
   }
 
-  const metric = run("python3", [
-    path.join(SCRIPT_DIR, "parse_baseline_metric.py"),
-    stdoutLog,
-  ], { capture: true });
-  if (metric.status !== 0) {
+  let samples;
+  try {
+    samples = readJson(samplesPath);
+  } catch (err) {
     const release = await settle({ action: "release-review", proposalId, options });
     const releaseOut = parseJsonOutput(release.stdout);
     if (releaseOut?.signature) txs.push(releaseOut.signature);
     return {
       result: "released",
       reason: "metric_parse_failed",
-      stdoutLog,
+      stdoutLog: samplesPath,
       verifiedScore: "",
-      error: metric.stderr || metric.stdout,
+      error: err.message,
       txs,
     };
   }
 
-  const metricText = metric.stdout.trim();
+  // Settle on the verifier's own measurement against the score the network
+  // already holds. The miner's claimed score is recorded but never gates the
+  // outcome: comparing the two would reject honest work whenever the verifier's
+  // host differs from the miner's, and a claim the verifier cannot reproduce is
+  // worth nothing regardless of what it says.
+  const metricText = String(samples.aggregate);
   const verifiedScore = metricToAggregateScore(metricText, direction);
   const claimedScore = BigInt(proposal.claimedAggregateScore.toString());
-  if (verifiedScore === claimedScore) {
-    const uploaded = uploadIrys({ file: stdoutLog, role: "verifierMetrics", options });
+  const bestScore = incumbentAggregateScore(project);
+  const bips = Number(protocol?.measurement?.minScoreImprovementBips ?? 100);
+  const threshold = improvementThreshold(bestScore, bips);
+
+  if (verifiedScore >= threshold) {
+    const uploaded = uploadIrys({ file: samplesPath, role: "verifierMetrics", options });
     const approve = await settle({
       action: "approve",
       proposalId,
-      metricsFile: stdoutLog,
+      metricsFile: samplesPath,
       metricsIrysId: uploaded.id,
       verifiedScore: verifiedScore.toString(),
       options,
@@ -435,19 +527,24 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, opt
     return {
       result: "approved",
       reason: "ok",
-      stdoutLog,
+      stdoutLog: samplesPath,
       verifiedScore: verifiedScore.toString(),
       error: "",
       txs,
     };
   }
 
-  const ev = evidenceFile(proposalDir, "metric-mismatch-reject.json", {
-    reason: "metric_mismatch",
+  const ev = evidenceFile(proposalDir, "no-improvement-reject.json", {
+    reason: "no_improvement",
     metric: metricText,
     direction,
+    samples: samples.samples,
+    cv: samples.cv,
+    minScoreImprovementBips: bips,
     claimedAggregateScore: claimedScore.toString(),
     verifiedAggregateScore: verifiedScore.toString(),
+    currentBestAggregateScore: bestScore.toString(),
+    requiredAggregateScore: threshold.toString(),
   });
   const uploaded = uploadIrys({ file: ev, role: "verifierRejectEvidence", options });
   const reject = await settle({
@@ -461,8 +558,8 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, opt
   if (rejectOut?.signature) txs.push(rejectOut.signature);
   return {
     result: "rejected",
-    reason: "metric_mismatch",
-    stdoutLog,
+    reason: "no_improvement",
+    stdoutLog: samplesPath,
     verifiedScore: verifiedScore.toString(),
     error: "",
     txs,
@@ -548,11 +645,17 @@ async function main() {
       const txs = [];
       if (claimOut?.signature) txs.push(claimOut.signature);
 
+      // Re-read the project each time: an approval by another verifier may
+      // have advanced the best score since this proposal was submitted, and
+      // the bar a candidate must clear is the current one, not a stale one.
+      const project = await program.account.project.fetch(pdas.project(projectId));
+
       const outcome = await verifyClaimedProposal({
         solana,
         config,
         proposalId,
         proposal,
+        project,
         options,
       });
       appendReviewRecord({
