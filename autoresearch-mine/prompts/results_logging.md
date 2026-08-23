@@ -29,4 +29,17 @@ Match **`schemas/trial_record.schema.json`**. Required fields:
 
 Optional: `hypothesis` (string).
 
+Optional git-artifact fields, filled in on a committed improvement:
+
+| Field | Notes |
+|-------|--------|
+| `base_commit` | 40-hex commit this trial's work branched from |
+| `head_commit` | 40-hex commit the trial produced (same as `git_head_after`) |
+| `tree_hash` | 64-hex canonical tree commitment from `tree_hash.py` at `head_commit` |
+
+These are what a proposal references, so recording them per trial is what lets
+a submission be reconstructed from the log. Copy the values printed by
+`submit_trial_proposal.py` rather than recomputing them, so the row and the
+proposal cannot disagree. Leave them `null` on a reverted trial.
+
 Never omit `stdout_log_path`.

@@ -1,6 +1,6 @@
 ---
 name: autoresearch-mine
-description: Run the Phase 2 OpenResearch mining loop on a finalized protocol.json and target repo. Self-contained bundled harness (run_baseline, preview_metrics), repeated-trial sampling, append-only trials.jsonl, optional miningLoop session limits, network_state (manual or synced from the published project), optional proposal submit to the configured settlement layer, unattended stop conditions. Use when the user wants to mine without installing autoresearch-create.
+description: Run the Phase 2 OpenResearch mining loop on a finalized protocol.json and target repo. Self-contained bundled harness (run_baseline, preview_metrics), repeated-trial sampling, append-only trials.jsonl, optional miningLoop session limits, network_state (manual or synced from the published project), git-primary candidate branches, optional proposal submit to the configured settlement layer, unattended stop conditions. Use when the user wants to mine without installing autoresearch-create.
 ---
 
 # autoresearch-mine
@@ -38,6 +38,40 @@ Layer detail lives in the reference docs, not here:
 - `solana` → [`references/onchain-mining-solana.md`](references/onchain-mining-solana.md)
 - `0g` → [`references/onchain-mining-0g.md`](references/onchain-mining-0g.md)
 
+## Artifact model: the commits are the artifact
+
+A proposal references **`base_commit` → `head_commit`** plus a **`tree_hash`**.
+There is nothing to pack, upload, or unpack: git is already content-addressed
+and already replicated to everyone who has touched the project, so fetching an
+object by its id and having git accept it *is* the integrity check. This is
+also what preserves authorship — the miner's commits survive into the project's
+history instead of arriving as an anonymous snapshot.
+
+`tree_hash` is not there to prove the host served the right commit. Its job is
+SHA-1 hardening: git commit ids are SHA-1 and this system has money attached,
+so a second independent SHA-256 commitment means a SHA-1 collision alone is not
+enough to swap the code a proposal points at. Compute it only with
+**`tree_hash.py`** — never by hashing `git archive` output, which varies with
+git version and `export-subst` / `export-ignore` gitattributes, so two honest
+machines would disagree and every proposal would fail verification.
+
+Consequences for the loop:
+
+1. Publish the winning commit with **`push_candidate_branch.sh`** before
+   submitting. A commit a verifier cannot fetch cannot be scored.
+2. **Do not open pull requests.** Verifiers settle on-chain and merge the
+   accepted work; the same allowlist holds both powers, so there is no separate
+   identity whose compromise moves money. A miner-opened PR is noise at best.
+3. **Never force-push and never rewrite published history.** The proposal is
+   bound to a commit; rewriting it invalidates the artifact under review.
+
+> **Ahead of the contract.** No deployed settlement layer stores a git ref yet.
+> `submit_trial_proposal.py` runs in git mode by default, computes and records
+> the proposal, and exits **3** to say the active layer cannot accept it. Pass
+> **`--legacy-artifact`** for a live submission today: that archives the tree
+> and submits a storage id to the contract that is actually deployed, while
+> still recording the commit it came from.
+
 ## Identity and funding
 
 Mining that settles proposals needs an identity on the active settlement layer that can pay fees and post stake, and a separate **reward recipient** owned by the user.
@@ -55,7 +89,7 @@ The exact CLI install command, identity generation, funding source, balance chec
 ## Unattended mode
 
 - Export **`GIT_TERMINAL_PROMPT=0`** during mining so git never blocks on credentials in headless runs.
-- Do **not** ask the miner between trials; stop only on limits, PR success (optional), or fatal errors.
+- Do **not** ask the miner between trials; stop only on limits, a successful proposal submit (optional), or fatal errors.
 - Optional env shortcuts: **`AUTORESEARCH_PROTOCOL`**, **`AUTORESEARCH_REPO_ROOT`** (document paths once at start).
 - If the user identifies the project by **project id** rather than handing over local files, run **`bootstrap_project.mjs`** first to resolve, download, and verify the mining inputs.
 
@@ -67,7 +101,7 @@ The exact CLI install command, identity generation, funding source, balance chec
 | `MINING_MAX_TRIALS` | Fallback if `miningLoop.maxTrials` absent (default **50** if both absent). |
 | `MINING_MAX_WALL_SECONDS` | Fallback if `miningLoop.maxSessionWallSeconds` absent (**-1** = no cap when merged in `read_mining_limits.py`). |
 | `MINING_MAX_STAGNANT_TRIALS` | Fallback if `miningLoop.maxConsecutiveNonImprovements` absent (**-1** = no stagnation stop). |
-| `MINING_STOP_AFTER_PR` | Fallback if `miningLoop.stopAfterSuccessfulPr` absent (default **true**). |
+| `MINING_STOP_AFTER_PR` | Fallback if `miningLoop.stopAfterSuccessfulPr` absent (default **true**). Read as "stop after a successful submission" — miners no longer open PRs. |
 | `GH_TOKEN` / `GITHUB_TOKEN` | Non-interactive **`gh`** authentication. |
 
 ### Harness, sandbox, and settlement-neutral variables
@@ -83,6 +117,15 @@ The exact CLI install command, identity generation, funding source, balance chec
 | `ARAH_METRIC_SCALE` | Integer scale for signed-integer ↔ float metric conversion; must match the scale the project was published with (default **1000000**). |
 | `ARAH_PROJECT_ID` | Published **project id** for frontier sync; overrides **`miningLoop.onChainProjectId`** in `protocol.json` when set. |
 | `ARAH_STAKE` | Optional stake count in **whole** reward-token units. Defaults to **`1`** when absent — settlement only requires `stake > 0`. |
+
+### Git-artifact variables
+
+| Variable | Purpose |
+|----------|---------|
+| `ARAH_MINER_ID` | Miner identity encoded in the candidate branch name; fallback for `push_candidate_branch.sh --miner-id`. |
+| `ARAH_PUSH_REMOTE` | Project repo remote name or URL (default `origin`) used to publish candidates and to confirm a commit is published. |
+| `ARAH_CANDIDATE_PREFIX` | Branch namespace for candidates (default `openresearch/candidate`). |
+| `ARAH_REPO_URL` | Clone URL for a git-mode bootstrap, checked against the project's on-chain repo commitment. |
 
 ### Adapter-specific environment variables
 
@@ -142,7 +185,11 @@ Optional **AXL sidechat** writes miner-to-miner field notes to **`sidechat.jsonl
 | `scripts/_resolve_create_scripts.sh` | Resolve harness directory (default `vendor/harness`, override via env). |
 | `scripts/chain.mjs` | Settlement-layer resolution and the operation → adapter registry. The only file that maps `bootstrap` / `submitProposal` onto a concrete implementation. |
 | `scripts/bootstrap_project.mjs` | **Fetch a published project and prepare a working tree.** Neutral entrypoint: `--project-id`, `--output-dir`, `--repo-root`, `--prepare-repo`, `--skip-existing`, `--chain`, `--show-chain`; other flags pass through to the adapter. |
-| `scripts/submit_trial_proposal.py` | **Submit a winning trial as a proposal.** Archives the committed trial code, pairs it with the trial benchmark log, and dispatches to the adapter selected by `--chain`. |
+| `scripts/submit_trial_proposal.py` | **Submit a winning trial as a proposal.** Default git mode records `base_commit` / `head_commit` / `tree_hash` after confirming the commit is published. `--legacy-artifact` archives the tree and dispatches to the adapter selected by `--chain`. |
+| `scripts/push_candidate_branch.sh` | **Publish the winning commit** to the project repo under a collision-free branch. Never force-pushes, never opens a PR, refuses a dirty tree or a branch that already holds different content. |
+| `scripts/tree_hash.py` | Canonical SHA-256 tree commitment. The single definition shared by miner and verifier — do not reimplement it. |
+| `scripts/git_artifacts.mjs` | Fetch / check out / verify a commit from git (transport allowlist, tree-hash verification). Used by the git-mode bootstrap. |
+| `scripts/link_identity.py` | Optional, revocable, miner-signed binding of a code-hosting handle to the mining address, so accepted work shows up on a real profile. Emits the payload and the plan; the contract instruction is not deployed yet. |
 | `scripts/read_mining_limits.py` | Print `max_trials`, `max_session_wall_seconds`, `max_stagnant_trials`, `stop_after_pr`, and optionally **`on_chain_project_id`** (if `miningLoop.onChainProjectId` or **`ARAH_PROJECT_ID`** is set). |
 | `scripts/init_mine_workspace.sh` | Create `.autoresearch/mine` tree. |
 | `scripts/bootstrap_repo.sh` | Clone or reuse repo from protocol `meta.repo`. |
@@ -157,14 +204,12 @@ Optional **AXL sidechat** writes miner-to-miner field notes to **`sidechat.jsonl
 | `scripts/list_mutable_paths.py` | List tracked paths matching allowed globs. |
 | `scripts/revert_mutable_surface.sh` | `git checkout HEAD` on allowed paths only. |
 | `scripts/commit_improvement.sh` | `git add` allowed paths + commit with fixed message. |
-| `scripts/prepare_pr_branch.sh` | `git checkout -B mine/<bundle>/<date>-<trial>`. |
 | `scripts/validate_network_state.sh` | Check `network_state.json` vs protocol. |
-| `scripts/open_pr_with_evidence.sh` | `gh pr create` after guard checks (`_open_pr_evidence.py`). |
-| `schemas/trial_record.schema.json` | Trial row shape. |
+| `schemas/trial_record.schema.json` | Trial row shape, including the optional `base_commit` / `head_commit` / `tree_hash` of a committed improvement. |
 | `schemas/sidechat_message.schema.json` | Optional AXL side conversation row shape. |
 | `schemas/network_state.schema.json` | `network_state.json` shape (manual or synced). |
 | `requirements-chain.txt` | Python deps used by the settlement adapters only. |
-| `prompts/*.md` | Agent contracts for bootstrap, loop, logging, git, PR. |
+| `prompts/*.md` | Agent contracts for bootstrap, loop, logging, and git. |
 
 ### Adapter-specific resources
 
@@ -172,7 +217,7 @@ Do not call these from the workflow; the neutral entrypoints select the right on
 
 | Resource | Layer | Role |
 |----------|-------|------|
-| `scripts/bootstrap_from_solana.mjs` | `solana` | Bootstrap adapter: fetch the project account, download artifacts by their recorded storage ids, verify hashes, optionally unpack and init the workspace, and sync `network_state.json`. |
+| `scripts/bootstrap_from_solana.mjs` | `solana` | Bootstrap adapter. **Git mode** when the project record names a commit: clone/fetch, check out, verify the tree hash, and take `protocol.json` from the tree. **Storage mode** otherwise: download artifacts by their recorded ids, verify hashes, unpack. Both init the workspace and sync `network_state.json`. |
 | `scripts/download_irys_artifacts.mjs` | `solana` | Lower-level artifact downloader by id/tag with SHA-256 verification. |
 | `scripts/submit_proposal_solana.mjs` | `solana` | Submit adapter: builds/sends the proposal with code/log hashes and stake accounts. |
 | `scripts/upload_trace_irys.mjs` | `solana` | Upload a captured trace to the layer's storage. |
@@ -224,11 +269,25 @@ node scripts/bootstrap_project.mjs \
   --prepare-repo
 ```
 
-This resolves the project on the active settlement layer, downloads the
-protocol / repo snapshot / benchmark / baseline artifacts, **verifies every
-file's hash before it can be used for mining**, unpacks the repo snapshot,
-initializes `.autoresearch/mine`, and prints the resolved protocol and repo
-paths. Continue the loop with those paths.
+This resolves the project on the active settlement layer, prepares the working
+tree, **verifies the code before it can be used for mining**, initializes
+`.autoresearch/mine`, and prints the resolved protocol and repo paths. Continue
+the loop with those paths.
+
+How the tree is prepared depends on what the project record carries:
+
+- **Git** (record names a commit): clones/fetches the repo, checks out the
+  commit detached, verifies the canonical tree hash, stamps the starting point
+  into `refs/openresearch/base`, and takes `protocol.json` from the tree. Pass
+  `--repo-url <https-or-ssh-url>` — the chain stores `sha256("host/owner/repo")`,
+  which cannot be reversed into a URL, so the URL comes from you and is then
+  checked against that commitment. Add `--protocol-file <path>` if the repo does
+  not carry `protocol.json`.
+- **Stored artifacts** (record names storage ids): downloads the protocol / repo
+  snapshot / benchmark / baseline artifacts, verifies every file's hash, and
+  unpacks the snapshot. This is the fallback for every project published so far.
+
+`--git-mode auto` (the default) picks between them; `on` / `off` force one.
 
 Useful additions: `--repo-root <path>` to control where the working tree is
 created, `--skip-existing` to reuse verified downloads, and `--show-chain` when
@@ -300,13 +359,35 @@ published project, and it is the number the verifier will hold you to.
 
 On improvement vs local best: **`commit_improvement.sh`**. Else: **`revert_mutable_surface.sh`**.
 
-### 7. Automatic submit after beating the network best
+### 7. Publish the winning commit
+
+A proposal references a commit, so the commit has to be somewhere the verifier
+can fetch it. Run this straight after `commit_improvement.sh` — it is a no-op
+when the same commit is already published, so the loop can call it every time.
+
+```bash
+./push_candidate_branch.sh \
+  --repo-root /path/to/repo \
+  --trial-id <trial_id> \
+  --miner-id <mining address>
+# --dry-run prints the branch name and head_sha without pushing
+```
+
+The branch is `openresearch/candidate/<miner>/<trial>-<short-sha>`: the miner
+segment keeps two miners on the same trial id apart, and the sha makes the name
+content-derived, so re-running a trial with different code lands on a new
+branch instead of quietly replacing the earlier candidate. The script never
+force-pushes and refuses a name that already exists with different content.
+
+ssh remotes work as-is. For an https remote, pass `--token-env GH_TOKEN`: the
+hardened git environment drops the global config, and with it any credential
+helper. The token is fed through a helper that reads the environment, so it
+never reaches argv, `.git/config`, or the output.
+
+### 8. Automatic submit after beating the network best
 
 If a trial beats the freshly synced network best, do not wait for manual
-approval. After committing the improvement, call **`submit_trial_proposal.py`**
-immediately. It creates `.autoresearch/mine/submissions/<trial_id>/repo-snapshot.tar`,
-uses `.autoresearch/mine/runs/<trial_id>/stdout.log` as the benchmark log,
-hashes both, and dispatches to the adapter for the layer named by `--chain`.
+approval — call **`submit_trial_proposal.py`** immediately.
 
 ```bash
 python3 ./submit_trial_proposal.py \
@@ -317,8 +398,26 @@ python3 ./submit_trial_proposal.py \
   --claimed-metric 1.23 \
   --reward-recipient <user-main-wallet-address> \
   --yes
+# add --legacy-artifact for a live submission to a deployed contract,
 # plus the active layer's signing-identity flag — see its reference doc
 ```
+
+**Git mode (default).** Confirms the head commit is published, resolves
+`base_commit`, computes `tree_hash` with `tree_hash.py`, and writes
+`.autoresearch/mine/submissions/<trial_id>/proposal.json`. It exits **3**
+because no deployed contract stores a git ref yet; the payload is still on
+disk. `base_commit` is taken from `--base-commit`, then the `refs/openresearch/base`
+ref a git-mode bootstrap leaves behind, then the tracked upstream or the
+remote's default branch — and it errors rather than guessing, because an
+invented base makes the proposal claim a diff the miner never made.
+
+**Legacy mode (`--legacy-artifact`).** What works against the deployed
+contracts today: archives the tree to
+`.autoresearch/mine/submissions/<trial_id>/repo-snapshot.tar`, pairs it with
+`.autoresearch/mine/runs/<trial_id>/stdout.log`, hashes both, and dispatches to
+the adapter for `--chain`. It records the commit and tree hash in
+`submission.json` too, so the submission can be correlated with its commit once
+the git-aware contract lands.
 
 Pass `--chain` explicitly: unlike `bootstrap_project.mjs`, this script reads
 only `--chain` and `ARAH_CHAIN`, not `.autoresearch/chain.json`. It errors out
@@ -329,21 +428,31 @@ before the first live submit.
 that way mining-key compromise can only cost one trial's worth of stake + fees,
 not accumulated rewards.
 
-The submitter acquires any missing stake automatically before submitting. Use
+In legacy mode the submitter acquires any missing stake automatically. Use
 `--no-auto-buy` only for diagnostic runs where submission is expected to fail
 without existing stake. Use `--dry-run` to verify hashes and the settlement plan
 without signing; the identity/plan flags that a dry run needs are layer-specific
 and listed in that layer's reference doc, along with the hashing rule (SHA-256
 of file bytes) and metric scale.
 
-### 8. Optional PR
+**Do not open a pull request.** Verifiers settle on-chain and merge the accepted
+work; the candidate branch is how it becomes fetchable, not a request to merge.
+
+### 8b. Optional: link a public identity
+
+Rewards go to an address, which is not a portfolio. Bind a handle so accepted
+work shows up on a real profile:
 
 ```bash
-./prepare_pr_branch.sh /path/to/protocol.json /path/to/repo <trial_id>
-# push branch if required by remote
-./open_pr_with_evidence.sh /path/to/repo /path/to/protocol.json /path/to/repo/.autoresearch/mine/trials.jsonl
-# or --allow-local-only-pr when network_best_metric is null (see prompts/pr_gate.md)
+python3 ./link_identity.py --handle <github-handle> --address <mining address> \
+  --repo-root /path/to/repo
+# --revoke emits the unlink payload
 ```
+
+Optional, revocable, and miner-signed — nothing in settlement reads it, so a
+miner who wants to stay pseudonymous loses no reward. Ask the user before
+running it; never link a handle they did not give you. The contract instruction
+is not deployed yet, so the command emits the payload and prints the plan.
 
 ### 9. Optional AXL sidechat
 
@@ -382,7 +491,10 @@ Use sidechat only for side conversation: experiment hints, failed-hypothesis mem
 | `bootstrap_project.mjs` | Passes through the adapter's exit code; **1** if the adapter cannot be launched or the configured layer is unsupported. |
 | `env_utils.py` | Helper module; no direct CLI. |
 | `run_trial.sh` | Same as `run_measured_trials.sh`; **3** if harness dir missing; **4** if the sample was too dispersed to score. |
-| `submit_trial_proposal.py` | 0 submitted; 1 args / dirty repo / missing trial log / submit failure. |
+| `push_candidate_branch.sh` | 0 pushed / already published / `--dry-run`; 1 usage; 2 not a repo, dirty tree, or unresolvable commit; **3** remote rejected by the transport allowlist; **4** branch exists with different content; **5** push failed. |
+| `submit_trial_proposal.py` | 0 submitted (or git-mode `--dry-run`); 1 args / dirty repo / missing trial log / unresolvable `base_commit` / submit failure; **3** git mode prepared but the active layer has no git-artifact contract; **4** head commit not published on the project repo. |
+| `tree_hash.py` | 0 hash printed (and matched `--verify`); 2 usage or not a git repo; **3** `--verify` mismatch; **4** unhashable entry (submodule or unknown mode). |
+| `link_identity.py` | 0 payload written; 1 bad args / invalid handle / IO; **3** `--submit` requested but no deployed contract has `link_identity`. |
 | `capture_trace.py` | 0 (also when capture is disabled); 1 bad args / IO / schema failure. |
 | `append_trial_record.py` | 0; 1 validation; 2 IO. |
 | `axl_sidechat_send.py` | 0 sent / disabled / no peers; 1 invalid input or every configured peer failed. |
@@ -391,9 +503,7 @@ Use sidechat only for side conversation: experiment hints, failed-hypothesis mem
 | `preview_mining_context.sh` | 0; 1. |
 | `revert_mutable_surface.sh` | 0; 1. |
 | `commit_improvement.sh` | 0 commit; 1 nothing to commit; 2 git error. |
-| `prepare_pr_branch.sh` | 0; 1. |
 | `validate_network_state.sh` | 0; 1 mismatch. |
-| `open_pr_with_evidence.sh` | 0 PR opened; 1 `gh` error; 2 args/file; **3** no `gh`; **4** guard failed. |
 
 ### Adapter-specific exit codes
 
@@ -416,4 +526,4 @@ Verifier review / TEE / deep IPFS hosting automation — use **`autoresearch-cre
 
 ## Final response
 
-Report paths to `protocol.json`, repo root, `trials.jsonl`, last metric, and whether a PR was opened.
+Report paths to `protocol.json`, repo root, `trials.jsonl`, last metric, the pushed candidate branch and `head_sha` if any, and whether a proposal was submitted.

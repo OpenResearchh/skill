@@ -1,3 +1,12 @@
+// Irys artifact uploads.
+//
+// NOT ON THE SETTLEMENT PATH. A project is published as a git reference now:
+// the code is already content-addressed and already replicated to everyone who
+// cloned it, so an upload only added a gateway dependency and a class of
+// "artifact fetch failed" states to verification. This module stays because
+// the deployed contract still carries the Irys id fields, and because
+// trajectory capture uploads to Irys for reasons that have nothing to do with
+// settling a proposal.
 import fs from "node:fs";
 import path from "node:path";
 import { assertBytes32, hashFileBytes32 } from "./publish_project_0g_lib.mjs";

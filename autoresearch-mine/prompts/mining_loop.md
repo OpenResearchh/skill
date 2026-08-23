@@ -9,7 +9,7 @@ You run the **outer mining loop** without asking the human between trials.
 3. If mining against a legacy 0G on-chain project: when **`read_mining_limits.py`** prints **`on_chain_project_id=…`** (from **`miningLoop.onChainProjectId`** or env **`ARAH_PROJECT_ID`**), refresh **`network_state.json`** with **`sync_registry_frontier.py`** using that id—same **`--metric-scale`** as `createProject`—so comparisons use the current registry best.
 3. If **`ARAH_AXL_ENABLED=1`**, poll sidechat once with `axl_sidechat_poll.py --repo-root <repo_root>` and use `.autoresearch/mine/sidechat.jsonl` only as advisory context for hypotheses.
 4. Run `read_mining_limits.py <protocol.json>` and parse `KEY=value` lines:
-   - `max_trials`, `max_session_wall_seconds` (-1 = no cap), `max_stagnant_trials` (-1 = no stagnation stop), `stop_after_pr`.
+   - `max_trials`, `max_session_wall_seconds` (-1 = no cap), `max_stagnant_trials` (-1 = no stagnation stop), `stop_after_pr` (read as "stop after a successful submission" — miners no longer open PRs).
 5. Track: trial count (every completed append to `trials.jsonl`), session wall time from first `run_trial.sh` start, consecutive non-improvements (increment when no new **local** best; reset on commit that improves local best).
 
 ## Each iteration
@@ -21,9 +21,16 @@ You run the **outer mining loop** without asking the human between trials.
 5. If mining against a legacy 0G on-chain project, refresh **`network_state.json`** again with **`sync_registry_frontier.py`** immediately before comparing; this avoids submitting against stale registry state. For Solana projects, keep using the manual/local frontier until `sync_solana_frontier` exists.
 6. Compare numerically using **`compare_metric.py`** — never compare floats in prose.
 7. If improved vs last local best: run `commit_improvement.sh <protocol.json> <repo_root> <trial_id> <before> <after>`; else run `revert_mutable_surface.sh <protocol.json> <repo_root>`.
-8. If the metric beats `network_state.network_best_metric` after the fresh sync on a legacy 0G project, create the on-chain proposal immediately. Call **`submit_trial_proposal.py`** with `--wallet-id <id>`, `--project-id` or `--token-address`, `--repo-root`, `--trial-id`, `--claimed-metric`, `--reward-recipient` (the user's main wallet, not the mining keystore), and `--auto-buy`. Pass `--passphrase-file <path>` if the keystore passphrase is not in the environment. Only pass `--stake` when overriding `ARAH_STAKE` / the default stake of `1`. Pass `--budget 0.05og` (or similar) to cap how much native gas `--auto-buy` may spend on the bonding curve. For Solana projects, upload the code archive and benchmark log to Irys first, then call **`submit_trial_proposal.py --chain solana`** with `--project-id`, `--solana-keypair`, `--solana-code-irys-id`, `--solana-benchmark-log-irys-id`, `--reward-recipient`, and `--yes`. The Solana submitter checks the miner project-token balance and calls `buy()` with native SOL for missing stake before `submit`; pass `--solana-buy-lamports` only to override the quote. Use the dry-run flags first when validating account maps.
-9. Build a JSON object for **`append_trial_record.py`** (see `prompts/results_logging.md`) and append one line to `trials.jsonl`.
-10. If **`ARAH_AXL_ENABLED=1`**, broadcast the latest trial with `axl_sidechat_send.py --record-file <repo_root>/.autoresearch/mine/trials.jsonl --peers "$ARAH_AXL_PEERS"`.
+8. If the metric beats `network_state.network_best_metric`, publish the winning commit before submitting: `push_candidate_branch.sh --repo-root <repo_root> --trial-id <trial_id> --miner-id <mining address>`. The commits are the artifact, so a proposal whose commit is not fetchable cannot be verified. The script never force-pushes and re-running it on the same commit is a no-op, so it is safe to call unconditionally after `commit_improvement.sh`.
+9. Then create the on-chain proposal immediately with **`submit_trial_proposal.py`**, passing `--project-id` or `--token-address`, `--repo-root`, `--trial-id`, `--claimed-metric`, and `--reward-recipient` (the user's main wallet, never the mining identity).
+   - **Live submissions need `--legacy-artifact`.** The default git mode records `base_commit` / `head_commit` / `tree_hash` and exits **3**, because no deployed contract stores a git ref yet. Run it first anyway: the payload it writes is the record of what this candidate committed to.
+   - Legacy mode on a 0G project: add `--wallet-id <id>`, `--auto-buy`, `--passphrase-file <path>` when the keystore passphrase is not in the environment, and `--budget 0.05og` (or similar) to cap what `--auto-buy` may spend on the bonding curve.
+   - Legacy mode on a Solana project: upload the code archive and benchmark log to permanent storage first, then pass `--chain solana --solana-keypair <path> --solana-code-irys-id <id> --solana-benchmark-log-irys-id <id> --yes`. The submitter checks the miner project-token balance and buys missing stake with native SOL before `submit`; pass `--solana-buy-lamports` only to override the quote.
+   - Only pass `--stake` when overriding `ARAH_STAKE` / the default stake of `1`. Use the dry-run flags first when validating account maps.
+10. Build a JSON object for **`append_trial_record.py`** (see `prompts/results_logging.md`) and append one line to `trials.jsonl`. On a committed improvement, include `base_commit`, `head_commit`, and `tree_hash` — the same values `submit_trial_proposal.py` printed.
+11. If **`ARAH_AXL_ENABLED=1`**, broadcast the latest trial with `axl_sidechat_send.py --record-file <repo_root>/.autoresearch/mine/trials.jsonl --peers "$ARAH_AXL_PEERS"`.
+
+Do **not** open a pull request. Verifiers merge accepted work; the candidate branch from step 8 is how it becomes fetchable, not a request to merge it.
 
 ## AXL sidechat rules
 
@@ -40,6 +47,6 @@ Do **not** override `execution.hardTimeoutSeconds` or `execution.stopCondition`.
 - Trial count ≥ `max_trials`
 - Session wall ≥ `max_session_wall_seconds` if that value is **≥ 0**
 - Stagnant trials ≥ `max_stagnant_trials` if that value is **≥ 0**
-- Successful PR when `stop_after_pr` is true (after `open_pr_with_evidence.sh` exits 0)
-- Successful on-chain proposal submit for a registry-best improvement, unless the user explicitly configured the run to continue mining after submit
+- Successful proposal submit when `stop_after_pr` is true
+- Successful on-chain proposal submit for a network-best improvement, unless the user explicitly configured the run to continue mining after submit
 - Unrecoverable script failure (report once and exit)

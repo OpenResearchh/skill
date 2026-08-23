@@ -41,13 +41,17 @@ Options:
   --cluster <name>         devnet, testnet, localnet, mainnet-beta. Defaults to devnet.
   --rpc-url <url>          Override Solana RPC URL.
   --program-id <pubkey>    Override OpenResearch program id.
+  --repo-url <url>         Project git remote. Defaults to ARAH_PROJECT_REPO, else the protocol's meta.repo.
+  --artifact-mode <mode>   git, irys, or auto (default) for both project and proposal artifacts.
+  --github-token-file <p>  File holding the GitHub token used to merge approved proposals.
+  --no-merge               Settle on-chain only; do not merge approved proposals on GitHub.
   --dry-run                Print plans and do not send transactions or upload.
 `);
 }
 
 function parseArgs(argv) {
   const options = {};
-  const boolKeys = new Set(["help", "once", "yes", "dryRun"]);
+  const boolKeys = new Set(["help", "once", "yes", "dryRun", "noMerge"]);
   for (let i = 0; i < argv.length; i += 1) {
     const raw = argv[i];
     if (!raw.startsWith("--")) throw new Error(`unexpected argument: ${raw}`);
@@ -93,6 +97,24 @@ function run(cmd, args, opts = {}) {
   });
   if (result.error) throw result.error;
   return result;
+}
+
+// Environment for anything that executes miner-supplied code.
+//
+// This process holds a GitHub token with write access to the project repo, and
+// it also runs the submission's own build and benchmark. Those two facts must
+// never meet: a token reachable from inside the sandbox turns "run untrusted
+// code" into "hand the repository to whoever wrote it". The token is used only
+// by the merge step, which talks to the REST API and never spawns the harness.
+function untrustedEnv(base = process.env) {
+  const env = { ...base };
+  for (const key of Object.keys(env)) {
+    if (/^(ARAH_GITHUB_TOKEN|GITHUB_TOKEN|GH_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_PAT)$/.test(key)) {
+      delete env[key];
+    }
+  }
+  env.GIT_TERMINAL_PROMPT = "0";
+  return env;
 }
 
 function runRequired(cmd, args, opts = {}) {
@@ -322,6 +344,47 @@ function improvementThreshold(bestScore, bips) {
   return bestScore + margin;
 }
 
+/**
+ * Merge an approved proposal into the project repo.
+ *
+ * Runs only after the on-chain approve has landed. Settlement is already final
+ * at this point, so every failure here — conflict, moved head, a project repo
+ * the verifier cannot write to — is reported as approved-but-unmerged and does
+ * not change the outcome. `merge_approved_proposal.mjs` exits 3 for exactly
+ * that case, which is why a non-zero status is not treated as an error.
+ */
+function mergeApproved({ proposalId, git, options }) {
+  if (options.noMerge) return { attempted: false, reason: "merge_disabled" };
+  if (!git?.commit) return { attempted: false, reason: "no_git_candidate" };
+  const repoUrl = options.repoUrl || git.remote || process.env.ARAH_PROJECT_REPO;
+  if (!repoUrl) return { attempted: false, reason: "no_project_repo" };
+
+  const args = [
+    path.join(SCRIPT_DIR, "merge_approved_proposal.mjs"),
+    "--proposal-id",
+    proposalId,
+    "--repo-url",
+    repoUrl,
+    "--commit",
+    git.commit,
+  ];
+  if (options.githubTokenFile) args.push("--token-file", options.githubTokenFile);
+  if (options.dryRun) args.push("--dry-run");
+  else args.push("--yes");
+
+  const result = run("node", args, { capture: true });
+  const parsed = parseJsonOutput(result.stdout);
+  if (!parsed) {
+    return {
+      attempted: true,
+      merged: false,
+      reason: "merge_step_failed",
+      detail: (result.stderr || result.stdout || "").trim(),
+    };
+  }
+  return { attempted: true, ...parsed };
+}
+
 function evidenceFile(dir, name, payload) {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, name);
@@ -335,6 +398,14 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, pro
   const reviewId = `solana-p${proposalId}-${Date.now()}`;
   const txs = [];
 
+  // Git is the artifact store: the proposal points at a commit in the project
+  // repo, and fetching that commit by its id — plus the canonical tree hash —
+  // is the integrity check. The Irys path stays reachable for projects
+  // published before the migration; `--artifact-mode auto` picks per project.
+  const gitArgs = [
+    ...(options.artifactMode ? ["--artifact-mode", options.artifactMode] : []),
+    ...(options.repoUrl ? ["--repo-url", options.repoUrl] : []),
+  ];
   const resolve = runRequired("node", [
     path.join(SCRIPT_DIR, "resolve_proposal_artifacts_solana.mjs"),
     "--proposal-id",
@@ -342,6 +413,7 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, pro
     "--output-dir",
     proposalDir,
     "--extract-code",
+    ...gitArgs,
     ...(options.cluster ? ["--cluster", options.cluster] : []),
     ...(options.rpcUrl ? ["--rpc-url", options.rpcUrl] : []),
     ...(options.programId ? ["--program-id", options.programId] : []),
@@ -350,8 +422,8 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, pro
   const resolved = readJson(resolvePath);
   const extractRoot = resolved.extractRoot;
 
-  // Score against the project's own protocol and harness, fetched by the Irys
-  // ids on the Project account and hash-verified. Reading either from the
+  // Score against the project's own protocol and harness, taken from the
+  // project's pinned commit and hash-verified. Reading either from the
   // submission would let whoever wrote the submission decide how it is judged.
   const trustedDir = path.join(proposalDir, "trusted");
   const fetchTrusted = runRequired("node", [
@@ -362,6 +434,7 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, pro
     trustedDir,
     "--extract-benchmark",
     "--skip-existing",
+    ...gitArgs,
     ...(options.cluster ? ["--cluster", options.cluster] : []),
     ...(options.rpcUrl ? ["--rpc-url", options.rpcUrl] : []),
     ...(options.programId ? ["--program-id", options.programId] : []),
@@ -382,8 +455,9 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, pro
     path.join(SCRIPT_DIR, "restore_trusted_harness.py"),
     "--protocol",
     protocolPath,
-    "--benchmark-dir",
+    "--trusted-root",
     trusted.harnessDir,
+    ...(trusted.git?.commit ? ["--expect-commit", trusted.git.commit] : []),
     "--repo-root",
     extractRoot,
     "--report",
@@ -460,12 +534,14 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, pro
     };
   }
 
+  // The harness executes the submission. Strip the merge credential from its
+  // environment first — this is the one process that holds both.
   const runTrial = run("bash", [
     path.join(SCRIPT_DIR, "run_verify_trial.sh"),
     protocolPath,
     extractRoot,
     reviewId,
-  ], { cwd: extractRoot, capture: true });
+  ], { cwd: extractRoot, capture: true, env: untrustedEnv() });
   const samplesPath = path.join(extractRoot, ".autoresearch", "verify", "runs", reviewId, "samples.json");
   // Exit 4 means the sample was too dispersed to score. That is a property of
   // this host, not evidence against the miner, so release rather than reject.
@@ -524,6 +600,9 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, pro
     });
     const approveOut = parseJsonOutput(approve.stdout);
     if (approveOut?.signature) txs.push(approveOut.signature);
+    // Same allowlist, two powers: the address that just approved on-chain is
+    // the address that merges the work. The merge cannot change the outcome.
+    const merge = mergeApproved({ proposalId, git: resolved.git, options });
     return {
       result: "approved",
       reason: "ok",
@@ -531,6 +610,8 @@ async function verifyClaimedProposal({ solana, config, proposalId, proposal, pro
       verifiedScore: verifiedScore.toString(),
       error: "",
       txs,
+      candidateCommit: resolved.git?.commit || "",
+      merge,
     };
   }
 
@@ -579,6 +660,21 @@ async function main() {
   if (!Number.isFinite(options.pollSeconds) || options.pollSeconds < 1) {
     throw new Error("--poll-seconds must be >= 1");
   }
+  if (options.githubTokenFile) options.githubTokenFile = path.resolve(options.githubTokenFile);
+  // The merge credential is optional; without it the loop still settles
+  // on-chain and reports every approval as approved-but-unmerged.
+  const hasMergeCredential = Boolean(
+    options.githubTokenFile ||
+      process.env.ARAH_GITHUB_TOKEN ||
+      process.env.GITHUB_TOKEN ||
+      process.env.GH_TOKEN,
+  );
+  if (!options.noMerge && !hasMergeCredential) {
+    console.error(
+      "no GitHub credential found; approved proposals will be settled on-chain and left unmerged " +
+        "(pass --github-token-file or --no-merge to make that explicit)",
+    );
+  }
   fs.mkdirSync(options.workDir, { recursive: true });
   const cliInfo = assertSolanaCli(options.keypair);
   const solana = await loadSolanaLib();
@@ -604,7 +700,16 @@ async function main() {
     verifier: keypair.publicKey,
   });
   const summary = projectSummary({ config, projectId, project, verifierInfo, cliInfo });
-  console.log(JSON.stringify({ project: summary }, null, 2));
+  console.log(JSON.stringify({
+    project: summary,
+    merge: {
+      // One allowlist, two powers: this same verifier address is the merge
+      // authority for the project repo.
+      enabled: !options.noMerge && hasMergeCredential,
+      repoUrl: options.repoUrl || process.env.ARAH_PROJECT_REPO || null,
+      credential: options.githubTokenFile ? "token-file" : hasMergeCredential ? "environment" : null,
+    },
+  }, null, 2));
   if (!verifierInfo.isVerifier) {
     console.error("validator wallet is not registered as verifier; stopping without transactions");
     return 2;
@@ -675,6 +780,11 @@ async function main() {
           verified_aggregate_score: outcome.verifiedScore,
           stdout_log_path: outcome.stdoutLog,
           transaction_hashes: txs.concat(outcome.txs),
+          candidate_commit: outcome.candidateCommit || "",
+          // record_merge takes this; null means approved-but-unmerged, which
+          // is a normal terminal state, not a settlement failure.
+          merged_commit: outcome.merge?.mergedCommit || null,
+          merge_status: outcome.merge?.reason || (outcome.merge?.merged ? "merged" : ""),
           error: outcome.error || "",
         },
       });
