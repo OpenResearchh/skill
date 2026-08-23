@@ -2,8 +2,51 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/OpenResearchh/experiment-protocol/network_state.schema.json",
   "title": "MiningNetworkState",
-  "description": ".autoresearch/mine/network_state.json — manual frontier (v1) or registry sync (0G)",
+  "description": ".autoresearch/mine/network_state.json — manual frontier (v1), Solana project frontier, or legacy registry sync (0G)",
   "oneOf": [
+    {
+      "title": "Solana project frontier",
+      "description": "Synced from the on-chain Project account. network_best_metric is the best score the network has accepted; a candidate must beat it by min_score_improvement_bips to be approved.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "source",
+        "protocolBundleId",
+        "project_id",
+        "cluster",
+        "program_id",
+        "network_best_metric",
+        "aggregate_score_int256",
+        "metric_scale",
+        "metric_name",
+        "direction",
+        "updated_at"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "1" },
+        "source": { "const": "solana" },
+        "protocolBundleId": { "type": "string" },
+        "project_id": { "type": "integer", "minimum": 0 },
+        "cluster": { "type": "string" },
+        "program_id": { "type": "string" },
+        "network_best_metric": { "type": ["number", "null"] },
+        "aggregate_score_int256": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$"
+        },
+        "metric_scale": { "type": "integer", "minimum": 1 },
+        "metric_name": { "type": "string" },
+        "direction": { "type": "string", "enum": ["minimize", "maximize"] },
+        "code_origin": {
+          "type": "string",
+          "enum": ["currentBestCode", "repoSnapshot"],
+          "description": "Which artifact the working tree was bootstrapped from."
+        },
+        "min_score_improvement_bips": { "type": "integer", "minimum": 0 },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
     {
       "title": "Manual network best",
       "type": "object",
