@@ -5,8 +5,8 @@ curl\s+http
 wget\s+http
 requests\.get\(
 subprocess\.call\(\s*\[\s*[\"']curl
-eval\s*\(
-exec\s*\(
+(?<!\.)\beval\s*\(
+(?<!\.)\bexec\s*\(
 __import__\s*\(\s*['\"]os['\"]
 GITHUB_TOKEN
 github_pat_[A-Za-z0-9_]{20,}
