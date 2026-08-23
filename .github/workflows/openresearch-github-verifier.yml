@@ -1,0 +1,68 @@
+name: OpenResearch GitHub Verifier
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+    inputs:
+      protocol_path:
+        description: "Path to protocol.json"
+        required: false
+        default: ".autoresearch/publish/protocol.json"
+      run_benchmark:
+        description: "Run benchmark verification"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  verify:
+    name: Verify OpenResearch proposal binding
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Write PR body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          Path(".openresearch-pr-body.md").write_text(os.environ.get("PR_BODY", ""), encoding="utf-8")
+          PY
+
+      - name: Verify proposal metadata and static gates
+        env:
+          RUN_BENCHMARK: ${{ github.event.inputs.run_benchmark || 'false' }}
+          PROTOCOL_PATH: ${{ github.event.inputs.protocol_path || '.autoresearch/publish/protocol.json' }}
+        run: |
+          args=(
+            --repo-root .
+            --pr-body-file .openresearch-pr-body.md
+            --output verification-result.json
+          )
+          if [[ -f "$PROTOCOL_PATH" ]]; then
+            args+=(--protocol "$PROTOCOL_PATH")
+          elif [[ -f protocol.json ]]; then
+            args+=(--protocol protocol.json)
+          fi
+          if [[ "$RUN_BENCHMARK" == "true" ]]; then
+            args+=(--run-benchmark)
+          fi
+          python3 autoresearch-validate/scripts/github_verify_pr.py "${args[@]}"
+
+      - name: Upload verification result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openresearch-verification-result
+          path: verification-result.json
