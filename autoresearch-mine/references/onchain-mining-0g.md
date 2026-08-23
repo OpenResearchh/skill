@@ -132,4 +132,4 @@ python3 scripts/submit_trial_proposal.py \
 
 ## Out of scope here
 
-Verifier **`approve` / `reject` / `claimReview`** flows are documented in the full onchain reference, not required for local mining PR gates.
+Verifier **`approve` / `reject` / `claimReview`** flows are documented in the full onchain reference; miners never call them.

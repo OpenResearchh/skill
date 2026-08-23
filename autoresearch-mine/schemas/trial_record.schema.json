@@ -38,6 +38,21 @@
     "git_head_after": { "type": ["string", "null"] },
     "harness_exit_code": { "type": "integer" },
     "error": { "type": "string" },
-    "hypothesis": { "type": "string" }
+    "hypothesis": { "type": "string" },
+    "base_commit": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Commit this trial's work branched from. Under the git-primary artifact model a proposal references base_commit -> head_commit, so recording it per trial is what lets a submission be reconstructed from the log."
+    },
+    "head_commit": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Commit the trial produced. Same value as git_head_after when the trial improved and was committed; null when the trial was reverted."
+    },
+    "tree_hash": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Canonical SHA-256 tree commitment at head_commit, from scripts/tree_hash.py. Independent of git's SHA-1 commit ids, so a SHA-1 collision alone cannot swap the code a proposal points at."
+    }
   }
 }

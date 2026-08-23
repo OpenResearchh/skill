@@ -452,6 +452,28 @@
         "stagingExample": { "type": "string" }
       }
     },
+    "GithubMirror": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "mode"],
+      "description": "Where accepted work is published for people to find. The mirror is a discovery surface, never an input to settlement: the chain decides what was accepted and who owns it, so if the mirror went away no canonical state would be lost. Declared in the protocol because a miner needs to know before starting whether their commits can land in the project's own repository or only as a pull request against an upstream nobody here controls.",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "Target repository as \"host/owner/repo\" (host defaults to github.com when omitted). Kept as one plain string because that is exactly the preimage the on-chain repo commitment hashes, so the mirror and the chain cannot drift into naming two different repositories."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["project-owned", "upstream-pr"],
+          "description": "project-owned: the settlement allowlist can write to this repository, so accepted work is merged into it directly. upstream-pr: the repository belongs to a third party and a merge is best-effort — on-chain approval is what pays the miner, and the mirror may show approved-but-unmerged forever."
+        },
+        "autoMergeAccepted": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether accepted work is merged without a further human decision. Only meaningful with mode=project-owned; under upstream-pr the choice is not the project's to make. Defaults to false because on-chain approval means the benchmark improved, which is not the same claim as the change being safe to ship to whoever depends on the repository."
+        }
+      }
+    },
     "Provenance": {
       "type": "object",
       "additionalProperties": false,
@@ -459,6 +481,7 @@
       "properties": {
         "resultsLog": { "$ref": "#/$defs/ResultsLog" },
         "gitWorkflow": { "$ref": "#/$defs/GitWorkflow" },
+        "githubMirror": { "$ref": "#/$defs/GithubMirror" },
         "baselineArtifactPath": {
           "type": "string",
           "description": "Optional path to stored baseline log for phase-2 handoff."

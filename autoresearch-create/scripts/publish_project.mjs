@@ -16,14 +16,22 @@ function usage() {
   console.log(`Usage:
   node scripts/publish_project.mjs \\
     --protocol-json <path> \\
-    --repo-snapshot-file <path> \\
-    --benchmark-file <path> \\
-    --baseline-metrics-file <path> \\
+    --repo-root <path to the checkout the baseline ran in> \\
     --baseline-aggregate-score <int> \\
-    --upload-artifacts --yes
+    --yes
+
+Artifact model:
+  A project is published as a reference to code that already lives in git: the
+  repo identity, a pinned baseline commit, and a tree hash. Nothing is
+  uploaded, so this is the default and needs no storage flags.
+
+  --upload-artifacts       Legacy: pack and upload the protocol, repo snapshot,
+                           benchmark and baseline metrics to the active layer's
+                           storage, and record their ids on-chain. Opt in only
+                           when the deployed contract still expects those
+                           fields, or when the layer supports nothing else.
 
 Options:
-  --upload-artifacts       Upload artifacts to the active layer's storage.
   --chain <name>           Override the configured settlement layer (${SUPPORTED_CHAINS.join(", ")}).
   --show-chain             Print settlement-layer detail while running.
 
@@ -31,9 +39,17 @@ Any other option is passed through to the active adapter unchanged.
 `);
 }
 
+// Layer-neutral flag -> the flag each adapter actually understands.
 const ALIASES = {
   "--upload-artifacts": { solana: "--upload-artifacts-to-irys", "0g": "--upload-artifacts-to-0g" },
+  "--git-primary": { solana: "--git-primary" },
 };
+
+// Chains whose adapter has no git-primary path. Publishing to them means the
+// legacy artifact upload, so say so once here rather than letting the caller
+// discover it from an adapter error. Not auto-added: an upload costs the user
+// money and must stay an explicit choice.
+const UPLOAD_ONLY_CHAINS = new Set(["0g"]);
 
 function translate(argv, chain) {
   const out = [];
@@ -41,10 +57,18 @@ function translate(argv, chain) {
     const alias = ALIASES[arg];
     if (alias) {
       const mapped = alias[chain];
-      if (mapped) out.push(mapped);
+      if (!mapped) {
+        throw new Error(`${arg} is not supported on the ${chain} settlement layer`);
+      }
+      out.push(mapped);
       continue;
     }
     out.push(arg);
+  }
+  if (UPLOAD_ONLY_CHAINS.has(chain) && !out.includes(ALIASES["--upload-artifacts"][chain])) {
+    console.error(
+      `[publish] ${chain} publishes the legacy uploaded artifacts, not a git reference; add --upload-artifacts so the on-chain hashes resolve to something retrievable.`,
+    );
   }
   return out;
 }

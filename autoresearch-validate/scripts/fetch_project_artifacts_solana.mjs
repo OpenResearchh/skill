@@ -2,10 +2,16 @@
 // Fetch the protocol and benchmark harness a project was published with.
 //
 // A verifier scores a submission against the project's own harness, never
-// against a copy carried inside the submission. These artifacts are addressed
-// by the Irys ids recorded in the on-chain Project account and verified
-// against the SHA-256 hashes stored alongside them, so the bytes used to judge
-// a proposal are fixed by the chain rather than by the miner.
+// against a copy carried inside the submission. Under the git-primary artifact
+// model that harness is the tree at the project's pinned commit: git is already
+// content-addressed, so fetching the commit by its id and having git accept it
+// fixes the bytes, and the recorded tree hash is the independent SHA-256
+// commitment on top of that. `protocol.json` is additionally checked against
+// the SHA-256 the chain stores for it.
+//
+// The Irys path is kept for projects published before the migration. It is
+// selected only when no git reference is available, and the tar guard below
+// still applies to it.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,6 +19,7 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Keypair } from "@solana/web3.js";
+import { materialize, remoteUrlFor } from "./git_artifacts.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const VALIDATE_DIR = path.resolve(SCRIPT_DIR, "..");
@@ -31,6 +38,7 @@ const DEFAULT_CREATE_SCRIPTS = path.resolve(
 );
 const DEFAULT_DEVNET_GATEWAY = "https://devnet.irys.xyz";
 const DEFAULT_MAINNET_GATEWAY = "https://gateway.irys.xyz";
+const DEFAULT_PROTOCOL_SUBPATH = ".autoresearch/publish/protocol.json";
 
 function usage() {
   console.log(`Usage:
@@ -43,8 +51,14 @@ Options:
   --cluster <name>         devnet, testnet, localnet, mainnet-beta. Defaults to devnet.
   --rpc-url <url>          Override Solana RPC URL.
   --program-id <pubkey>    Override OpenResearch program id.
+  --artifact-mode <mode>   git, irys, or auto (default). auto uses git when the project pins a commit.
+  --repo-url <url>         Project remote. Defaults to ARAH_PROJECT_REPO, else meta.repo.cloneUrl in protocol.json.
+  --commit <sha>           Project pinned commit override (full 40-char sha).
+  --tree-hash <hex>        Expected canonical tree hash override.
+  --protocol-subpath <p>   Path to protocol.json inside the tree. Defaults to ARAH_PROTOCOL_SUBPATH.
+  --fetch-depth <n>        Shallow fetch depth. Defaults to 1.
   --gateway-url <url>      Irys gateway override.
-  --extract-benchmark      Extract benchmark.tar into <output-dir>/harness.
+  --extract-benchmark      Extract benchmark.tar into <output-dir>/harness (irys mode only).
   --skip-existing          Reuse existing downloads after hash verification.
 `);
 }
@@ -144,6 +158,11 @@ function run(cmd, args) {
   }
 }
 
+// Security control for the Irys fallback: a tar member may name an absolute or
+// parent-relative path, or be a symlink or device node, and extraction would
+// then write outside the harness directory on the verifier host. Reject the
+// archive before `tar -xf` ever sees it. Git mode does not go through here —
+// the tree hash rejects symlink-escape and non-blob entries at their own layer.
 function assertSafeTarArchive(tarPath) {
   const code = String.raw`
 import os
@@ -179,6 +198,184 @@ except (tarfile.TarError, OSError) as exc:
   }
 }
 
+/** Hex for a byte array field, or null when the field is absent or all zero. */
+function bytesToHex(value) {
+  if (!value) return null;
+  if (typeof value === "string") {
+    const text = value.trim().toLowerCase().replace(/^0x/, "");
+    return /^[0-9a-f]+$/.test(text) && /[^0]/.test(text) ? text : null;
+  }
+  if (typeof value !== "object") return null;
+  const bytes = Array.from(value, (b) => Number(b) & 0xff);
+  if (!bytes.length || bytes.every((b) => b === 0)) return null;
+  return bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Read a git reference off an account, tolerating both a nested GitRef struct
+ * and the flat `<prefix>Commit` / `<prefix>TreeHash` / `<prefix>Repo` layout.
+ * Returns null on accounts that predate the git-primary model.
+ */
+function gitRefFromAccount(account, prefixes) {
+  for (const prefix of prefixes) {
+    const nested = account?.[prefix];
+    if (nested && typeof nested === "object" && typeof nested.commit !== "undefined") {
+      const commit = bytesToHex(nested.commit);
+      if (commit) {
+        return {
+          commit,
+          treeHash: bytesToHex(nested.treeHash ?? nested.tree_hash),
+          repoDigest: bytesToHex(nested.repo),
+        };
+      }
+    }
+    const commit = bytesToHex(account?.[`${prefix}Commit`]);
+    if (commit) {
+      return {
+        commit,
+        treeHash: bytesToHex(account?.[`${prefix}TreeHash`]),
+        repoDigest: bytesToHex(account?.[`${prefix}Repo`]),
+      };
+    }
+  }
+  return null;
+}
+
+/** Split a git remote into host/owner/repo for the `sha256("host/owner/repo")` commitment. */
+function parseRepoRef(url) {
+  const value = String(url || "").trim().replace(/\/+$/, "");
+  let host = "";
+  let rest = "";
+  let match;
+  if ((match = /^https?:\/\/([^/]+)\/(.+)$/.exec(value))) {
+    [, host, rest] = match;
+  } else if ((match = /^ssh:\/\/([^/]+)\/(.+)$/.exec(value))) {
+    [, host, rest] = match;
+  } else if ((match = /^[^@/]+@([^:]+):(.+)$/.exec(value))) {
+    [, host, rest] = match;
+  } else {
+    throw new Error(`cannot parse git remote '${url}'`);
+  }
+  host = host.replace(/^.*@/, "").replace(/:\d+$/, "").toLowerCase();
+  const parts = rest.replace(/\.git$/i, "").split("/").filter(Boolean);
+  if (parts.length < 2) throw new Error(`git remote '${url}' has no owner/name`);
+  const repo = parts.pop();
+  const owner = parts.join("/");
+  return { host, owner, repo, canonical: `${host}/${owner}/${repo}` };
+}
+
+function repoDigestOf(canonical) {
+  return crypto.createHash("sha256").update(canonical, "utf8").digest("hex");
+}
+
+/**
+ * Find the remote to fetch the project from.
+ *
+ * The chain stores only `sha256("host/owner/repo")`, so a URL has to come from
+ * somewhere else. Preference order is operator config, then the project's own
+ * `protocol.json` — which is hash-pinned on-chain, so reading the clone URL out
+ * of it is not the miner's choice.
+ */
+async function resolveRemote({ options, solana, project, gatewayUrl, outputDir, skipExisting }) {
+  const explicit = options.repoUrl || process.env.ARAH_PROJECT_REPO;
+  if (explicit) return { remote: String(explicit).trim(), from: "config", protocol: null };
+
+  let protocolFile = null;
+  try {
+    protocolFile = await downloadById({
+      gatewayUrl,
+      id: solana.bytes32ToIrysId(project.protocolIrysId, "protocolIrysId"),
+      hash: solana.bytes32ToHex(project.protocolHash, "protocolHash"),
+      name: "protocol.json",
+      filePath: path.join(outputDir, "protocol.json"),
+      skipExisting,
+    });
+  } catch (err) {
+    throw new Error(
+      `no project remote: pass --repo-url or set ARAH_PROJECT_REPO (protocol lookup failed: ${err.message})`,
+    );
+  }
+  const protocol = readJson(protocolFile.path);
+  const repo = protocol?.meta?.repo || {};
+  const remote =
+    repo.cloneUrl ||
+    (repo.owner && repo.name ? remoteUrlFor({ owner: repo.owner, repo: repo.name }) : null);
+  if (!remote) {
+    throw new Error("no project remote: pass --repo-url or set ARAH_PROJECT_REPO");
+  }
+  return { remote: String(remote).trim(), from: "protocol.meta.repo", protocol: protocolFile };
+}
+
+/** Locate protocol.json inside the checked-out tree and pin it to the on-chain hash. */
+function protocolFromTree({ sourceDir, options, expectedHash }) {
+  const subpath = options.protocolSubpath || process.env.ARAH_PROTOCOL_SUBPATH || DEFAULT_PROTOCOL_SUBPATH;
+  const candidates = [subpath, DEFAULT_PROTOCOL_SUBPATH, "protocol.json"];
+  const seen = new Set();
+  const found = [];
+  for (const rel of candidates) {
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    const full = path.join(sourceDir, rel);
+    if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+      found.push({ rel, path: full, sha256Bytes32: sha256Bytes32(full) });
+    }
+  }
+  if (!found.length) {
+    throw new Error(`protocol.json not found in the project tree (looked at ${candidates.join(", ")})`);
+  }
+  if (expectedHash) {
+    const match = found.find((entry) => entry.sha256Bytes32 === expectedHash);
+    if (!match) {
+      throw new Error(
+        `protocol.json SHA-256 mismatch: tree has ${found[0].sha256Bytes32} at ${found[0].rel}, chain records ${expectedHash}`,
+      );
+    }
+    return { ...match, hashVerified: true };
+  }
+  return { ...found[0], hashVerified: false };
+}
+
+async function resolveGitArtifacts({ project, options, outputDir, remoteInfo }) {
+  const onChain = gitRefFromAccount(project, ["baseline", "repoSnapshot", "benchmark", "harness"]);
+  const commit = String(options.commit || process.env.ARAH_PROJECT_COMMIT || onChain?.commit || "").toLowerCase();
+  if (!commit || !remoteInfo?.remote) return null;
+
+  const ref = parseRepoRef(remoteInfo.remote);
+  const digest = repoDigestOf(ref.canonical);
+  if (onChain?.repoDigest && onChain.repoDigest !== digest) {
+    throw new Error(
+      `repo mismatch: remote '${remoteInfo.remote}' hashes to ${digest} but the project commits to ${onChain.repoDigest}`,
+    );
+  }
+
+  const expectedTreeHash = options.treeHash || onChain?.treeHash || null;
+  const sourceDir = path.join(outputDir, "source");
+  const depth = Number(options.fetchDepth || "1");
+  const result = materialize({
+    dir: sourceDir,
+    remote: remoteInfo.remote,
+    commit,
+    treeHash: expectedTreeHash,
+    depth: Number.isFinite(depth) && depth > 0 ? depth : 1,
+  });
+  if (!expectedTreeHash) {
+    console.error(
+      `[git] project carries no tree hash; recorded observed hash ${result.treeHash} without verifying it`,
+    );
+  }
+  return {
+    remote: remoteInfo.remote,
+    remoteFrom: remoteInfo.from,
+    repo: { host: ref.host, owner: ref.owner, name: ref.repo },
+    canonicalRepo: ref.canonical,
+    repoDigest: digest,
+    commit: result.commit,
+    treeHash: result.treeHash,
+    treeHashVerified: Boolean(expectedTreeHash),
+    sourceDir: path.resolve(sourceDir),
+  };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
@@ -187,6 +384,10 @@ async function main() {
   }
   if (options.projectId === undefined) throw new Error("--project-id is required");
   if (!options.outputDir) throw new Error("--output-dir is required");
+  const mode = String(options.artifactMode || "auto").toLowerCase();
+  if (!["auto", "git", "irys"].includes(mode)) {
+    throw new Error("--artifact-mode must be auto, git, or irys");
+  }
 
   const solana = await loadSolanaLib();
   const config = solana.resolveSolanaConfig(options);
@@ -202,45 +403,116 @@ async function main() {
 
   const gatewayUrl = gatewayFor(options, config.cluster);
   const outputDir = path.resolve(options.outputDir);
+  const skipExisting = Boolean(options.skipExisting);
 
-  const artifacts = {
-    protocol: await downloadById({
-      gatewayUrl,
-      id: solana.bytes32ToIrysId(project.protocolIrysId, "protocolIrysId"),
-      hash: solana.bytes32ToHex(project.protocolHash, "protocolHash"),
-      name: "protocol.json",
-      filePath: path.join(outputDir, "protocol.json"),
-      skipExisting: Boolean(options.skipExisting),
-    }),
-    benchmark: await downloadById({
-      gatewayUrl,
-      id: solana.bytes32ToIrysId(project.benchmarkIrysId, "benchmarkIrysId"),
-      hash: solana.bytes32ToHex(project.benchmarkHash, "benchmarkHash"),
-      name: "benchmark.tar",
-      filePath: path.join(outputDir, "benchmark.tar"),
-      skipExisting: Boolean(options.skipExisting),
-    }),
-  };
+  const wantsGit =
+    mode === "git" ||
+    (mode === "auto" &&
+      Boolean(
+        options.commit ||
+          process.env.ARAH_PROJECT_COMMIT ||
+          gitRefFromAccount(project, ["baseline", "repoSnapshot", "benchmark", "harness"]),
+      ));
 
-  let harnessDir = null;
-  if (options.extractBenchmark) {
-    harnessDir = path.join(outputDir, "harness");
-    fs.mkdirSync(harnessDir, { recursive: true });
-    assertSafeTarArchive(artifacts.benchmark.path);
-    run("tar", ["-xf", artifacts.benchmark.path, "-C", harnessDir]);
+  let remoteInfo = null;
+  let git = null;
+  if (wantsGit) {
+    remoteInfo = await resolveRemote({
+      options,
+      solana,
+      project,
+      gatewayUrl,
+      outputDir,
+      skipExisting,
+    });
+    git = await resolveGitArtifacts({ project, options, outputDir, remoteInfo });
+  }
+  if (mode === "git" && !git) {
+    throw new Error(
+      "--artifact-mode git requires a pinned commit (on-chain, --commit, or ARAH_PROJECT_COMMIT)",
+    );
+  }
+
+  let artifacts;
+  let harnessDir;
+  let protocolPath;
+  if (git) {
+    console.log(`[git] ${git.canonicalRepo} @ ${git.commit} (tree ${git.treeHash})`);
+    let expectedProtocolHash = null;
+    try {
+      expectedProtocolHash = solana.bytes32ToHex(project.protocolHash, "protocolHash");
+    } catch {
+      expectedProtocolHash = null;
+    }
+    if (expectedProtocolHash && /^0x0+$/.test(expectedProtocolHash)) expectedProtocolHash = null;
+    const protocol = protocolFromTree({
+      sourceDir: git.sourceDir,
+      options,
+      expectedHash: expectedProtocolHash,
+    });
+    artifacts = {
+      protocol: {
+        source: "git",
+        subpath: protocol.rel,
+        sha256Bytes32: protocol.sha256Bytes32,
+        hashVerified: protocol.hashVerified,
+        path: protocol.path,
+      },
+      benchmark: {
+        source: "git",
+        remote: git.remote,
+        commit: git.commit,
+        treeHash: git.treeHash,
+        treeHashVerified: git.treeHashVerified,
+        path: git.sourceDir,
+      },
+    };
+    // The harness is the tree at the pinned commit; restore_trusted_harness.py
+    // copies the protocol-immutable paths out of it into the submitted tree.
+    harnessDir = git.sourceDir;
+    protocolPath = protocol.path;
+  } else {
+    artifacts = {
+      protocol: await downloadById({
+        gatewayUrl,
+        id: solana.bytes32ToIrysId(project.protocolIrysId, "protocolIrysId"),
+        hash: solana.bytes32ToHex(project.protocolHash, "protocolHash"),
+        name: "protocol.json",
+        filePath: path.join(outputDir, "protocol.json"),
+        skipExisting,
+      }),
+      benchmark: await downloadById({
+        gatewayUrl,
+        id: solana.bytes32ToIrysId(project.benchmarkIrysId, "benchmarkIrysId"),
+        hash: solana.bytes32ToHex(project.benchmarkHash, "benchmarkHash"),
+        name: "benchmark.tar",
+        filePath: path.join(outputDir, "benchmark.tar"),
+        skipExisting,
+      }),
+    };
+    harnessDir = null;
+    protocolPath = artifacts.protocol.path;
+    if (options.extractBenchmark) {
+      harnessDir = path.join(outputDir, "harness");
+      fs.mkdirSync(harnessDir, { recursive: true });
+      assertSafeTarArchive(artifacts.benchmark.path);
+      run("tar", ["-xf", artifacts.benchmark.path, "-C", harnessDir]);
+    }
   }
 
   const record = {
-    schemaVersion: "1",
+    schemaVersion: "2",
     source: "solana",
+    artifactSource: git ? "git" : "irys",
     cluster: config.cluster,
     programId: config.programId.toBase58(),
     projectId: String(options.projectId),
     projectPda: projectPda.toBase58(),
     gatewayUrl,
     artifacts,
+    git,
     harnessDir,
-    protocolPath: artifacts.protocol.path,
+    protocolPath,
     currentBestAggregateScore: project.currentBestAggregateScore?.toString?.() ?? null,
     baselineAggregateScore: project.baselineAggregateScore?.toString?.() ?? null,
   };
