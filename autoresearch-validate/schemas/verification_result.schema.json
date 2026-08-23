@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/OpenResearchh/experiment-protocol/verification_result.schema.json",
+  "title": "GitHubVerificationResult",
+  "description": "Structured result emitted by GitHub CI verification before settlement.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "utc_timestamp",
+    "proposal",
+    "github",
+    "result",
+    "reason_code",
+    "gates"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "utc_timestamp": { "type": "string", "format": "date-time" },
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposal_id", "project_id", "stake"],
+      "properties": {
+        "proposal_id": { "type": ["integer", "string"] },
+        "project_id": { "type": ["integer", "string", "null"] },
+        "stake": { "type": "string" },
+        "chain": { "type": ["string", "null"] }
+      }
+    },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "repo", "base_sha", "head_sha"],
+      "properties": {
+        "owner": { "type": "string" },
+        "repo": { "type": "string" },
+        "pr_number": { "type": ["integer", "null"] },
+        "pr_url": { "type": ["string", "null"] },
+        "base_sha": { "type": "string" },
+        "head_sha": { "type": "string" }
+      }
+    },
+    "result": {
+      "type": "string",
+      "enum": ["approved", "rejected", "released", "operational_failure"]
+    },
+    "reason_code": { "type": "string" },
+    "claimed_metric": { "type": ["number", "null"] },
+    "verified_metric": { "type": ["number", "null"] },
+    "verified_aggregate_score": { "type": ["string", "null"] },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code_hash": { "type": ["string", "null"] },
+        "benchmark_log_hash": { "type": ["string", "null"] },
+        "metrics_hash": { "type": ["string", "null"] },
+        "result_cid": { "type": ["string", "null"] }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["passed", "failed", "released", "skipped"]
+          },
+          "reason": { "type": ["string", "null"] },
+          "detail": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "error": { "type": ["string", "null"] }
+  }
+}

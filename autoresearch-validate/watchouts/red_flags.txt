@@ -8,3 +8,25 @@ subprocess\.call\(\s*\[\s*[\"']curl
 eval\s*\(
 exec\s*\(
 __import__\s*\(\s*['\"]os['\"]
+GITHUB_TOKEN
+github_pat_[A-Za-z0-9_]{20,}
+gh[pousr]_[A-Za-z0-9]{20,}
+AWS_SECRET_ACCESS_KEY
+OPENAI_API_KEY
+ANTHROPIC_API_KEY
+-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----
+chmod\s+[+]x\s+.*postinstall
+postinstall
+preinstall
+process\.env
+os\.environ
+sleep\s*\(\s*[0-9]+
+time\.sleep\s*\(\s*[0-9]+
+setTimeout\s*\([^,]+,\s*[0-9]{4,}
+BASELINE_METRIC\s*=
+AGGREGATE_METRIC\s*=
+benchmark.*skip
+skip.*benchmark
+hardcoded.*metric
+fixture.*detect
+__pycache__
