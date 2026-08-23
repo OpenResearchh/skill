@@ -1,0 +1,66 @@
+{
+  "scaling": [
+    {
+      "metric": "2.5",
+      "scale": "1000000",
+      "direction": "maximize",
+      "expected": "2500000"
+    },
+    {
+      "metric": "2.5",
+      "scale": "1000000",
+      "direction": "minimize",
+      "expected": "-2500000"
+    },
+    {
+      "metric": "-0.125",
+      "scale": "1000",
+      "direction": "maximize",
+      "expected": "-125"
+    },
+    {
+      "metric": "-0.125",
+      "scale": "1000",
+      "direction": "minimize",
+      "expected": "125"
+    },
+    {
+      "metric": "0",
+      "scale": "4294967295",
+      "direction": "maximize",
+      "expected": "0"
+    }
+  ],
+  "thresholds": [
+    {
+      "incumbent": "1000000",
+      "improvementBips": 500,
+      "expected": "1050000"
+    },
+    {
+      "incumbent": "0",
+      "improvementBips": 500,
+      "expected": "0"
+    },
+    {
+      "incumbent": "-1000000",
+      "improvementBips": 100,
+      "expected": "-990000"
+    },
+    {
+      "incumbent": "3",
+      "improvementBips": 1,
+      "expected": "3"
+    },
+    {
+      "incumbent": "3",
+      "improvementBips": 0,
+      "expected": "3"
+    },
+    {
+      "incumbent": "1267650600228229401496703205376",
+      "improvementBips": 10000,
+      "expected": "2535301200456458802993406410752"
+    }
+  ]
+}

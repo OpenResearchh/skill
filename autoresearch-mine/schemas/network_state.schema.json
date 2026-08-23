@@ -5,6 +5,48 @@
   "description": ".autoresearch/mine/network_state.json — manual frontier (v1), Solana project frontier, or legacy registry sync (0G)",
   "oneOf": [
     {
+      "title": "Stellar project frontier",
+      "description": "Synced from the Stellar OpenResearch project. Genesis projects use baseline_score as network_best_metric until current_best is present.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "source",
+        "protocolBundleId",
+        "project_id",
+        "network",
+        "contract_id",
+        "network_best_metric",
+        "aggregate_score_int256",
+        "metric_scale",
+        "metric_name",
+        "direction",
+        "updated_at"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "1" },
+        "source": { "const": "stellar" },
+        "protocolBundleId": { "type": "string" },
+        "project_id": { "type": "integer", "minimum": 0 },
+        "network": { "type": "string" },
+        "contract_id": { "type": "string" },
+        "network_best_metric": { "type": ["number", "null"] },
+        "aggregate_score_int256": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$"
+        },
+        "metric_scale": { "type": "integer", "minimum": 1 },
+        "metric_name": { "type": "string" },
+        "direction": { "type": "string", "enum": ["minimize", "maximize"] },
+        "code_origin": {
+          "type": "string",
+          "enum": ["current_best", "baseline"]
+        },
+        "min_score_improvement_bips": { "type": "integer", "minimum": 0 },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    {
       "title": "Solana project frontier",
       "description": "Synced from the on-chain Project account. network_best_metric is the best score the network has accepted; a candidate must beat it by min_score_improvement_bips to be approved.",
       "type": "object",

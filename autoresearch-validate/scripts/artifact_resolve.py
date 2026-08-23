@@ -56,16 +56,48 @@ def fetch_url(url: str, dest: Path) -> None:
 
 
 def extract_tarball(tar_path: Path, dest: Path) -> None:
+    dest = dest.resolve()
     dest.mkdir(parents=True, exist_ok=True)
-    if tar_path.suffix == ".gz" or str(tar_path).endswith(".tar.gz"):
-        mode = "r:gz"
-    else:
-        mode = "r:"
-    with tarfile.open(tar_path, mode) as tf:
+
+    def bad_path(name: str) -> bool:
+        if not name:
+            return True
+        normalized = name.replace("\\", "/")
+        if normalized.startswith("/") or (len(normalized) >= 2 and normalized[1] == ":"):
+            return True
+        parts = [part for part in normalized.split("/") if part not in ("", ".")]
+        return any(part == ".." for part in parts)
+
+    def safe_join(name: str) -> Path:
+        target = (dest / name).resolve()
         try:
-            tf.extractall(dest, filter="data")  # type: ignore[call-arg]
-        except TypeError:
-            tf.extractall(dest)
+            target.relative_to(dest)
+        except ValueError as exc:
+            raise ValueError(f"unsafe tar path: {name}") from exc
+        return target
+
+    with tarfile.open(tar_path, "r:*") as tf:
+        members = []
+        for member in tf.getmembers():
+            if bad_path(member.name):
+                raise ValueError(f"unsafe tar path: {member.name}")
+            if member.linkname and bad_path(member.linkname):
+                raise ValueError(f"unsafe tar link: {member.linkname}")
+            if not (member.isfile() or member.isdir()):
+                raise ValueError(f"unsupported tar entry type: {member.name}")
+            safe_join(member.name)
+            members.append(member)
+        for member in members:
+            target = safe_join(member.name)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            src = tf.extractfile(member)
+            if src is None:
+                raise ValueError(f"cannot read tar member: {member.name}")
+            with src, target.open("wb") as out:
+                out.write(src.read())
 
 
 def resolve_artifacts(code_hash: str, benchmark_log_hash: str) -> dict[str, str]:

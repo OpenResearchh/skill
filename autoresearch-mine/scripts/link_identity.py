@@ -22,16 +22,15 @@ learns "this address claims this handle"; the direction "this handle claims
 this address" needs a matching public post from the account itself. The
 printed plan says where that goes. Treat an unconfirmed binding as a claim.
 
-**This requires the identity instructions from the contract spec
-(``link_identity`` / ``unlink_identity``), which are not deployed on any
-settlement layer yet.** The command therefore emits the exact payload and
-prints the plan; it does not invent a contract call. ``--submit`` exits 3 to
-say so rather than pretending.
+**On Stellar this submits ``link_identity`` / ``unlink_identity`` when
+``--submit --secret-key-file --yes`` are passed.** The binding is metadata
+only: it grants no authority and does not redirect rewards. Other settlement
+layers still emit the payload and print the plan; ``--submit`` then exits 3.
 
 Exit codes:
-  0  payload written and plan printed
+  0  payload written (and submitted, on Stellar)
   1  bad arguments or IO failure
-  3  --submit requested but no deployed contract has link_identity
+  3  --submit requested but the active layer has no identity instruction
 """
 
 from __future__ import annotations
@@ -41,6 +40,7 @@ import hashlib
 import json
 import re
 import secrets
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,9 +57,7 @@ DOMAIN = "openresearch/identity/v1"
 PLATFORMS = {"github": 0}
 
 # Settlement layers whose deployed contract has link_identity / unlink_identity.
-# Empty until one ships; adding a name here without wiring the adapter would be
-# worse than the current honest refusal.
-IDENTITY_CHAINS: frozenset[str] = frozenset()
+IDENTITY_CHAINS: frozenset[str] = frozenset({"stellar"})
 
 # GitHub handle rules: 1-39 chars, alphanumerics and single inner hyphens.
 GITHUB_HANDLE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
@@ -126,11 +124,17 @@ def print_plan(payload: dict[str, object], chain: str, submitted: bool) -> None:
             file=sys.stderr,
         )
     if not submitted:
-        print(
-            f"Step 2 is not available: the {chain} contract has no identity "
-            "instruction yet. The payload above is ready for the moment it does.",
-            file=sys.stderr,
-        )
+        if chain in IDENTITY_CHAINS:
+            print(
+                "Pass --submit --secret-key-file <path> --yes to send step 2 on-chain.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Step 2 is not available: the {chain} contract has no identity "
+                "instruction yet. The payload above is ready for the moment it does.",
+                file=sys.stderr,
+            )
 
 
 def main() -> int:
@@ -138,8 +142,7 @@ def main() -> int:
         description=(
             "Emit a miner-signed payload binding a code-hosting handle to a chain "
             "address, so accepted work shows up on a real profile. Optional and "
-            "revocable. Requires the identity instructions from the contract spec, "
-            "which are not deployed yet."
+            "revocable. On Stellar, --submit sends link_identity / unlink_identity."
         ),
     )
     parser.add_argument("--handle", help="Handle to bind (omit with --revoke).")
@@ -153,8 +156,13 @@ def main() -> int:
     parser.add_argument(
         "--submit",
         action="store_true",
-        help="Send the binding on-chain. Exits 3 until a layer deploys link_identity.",
+        help="Send the binding on-chain.",
     )
+    parser.add_argument(
+        "--secret-key-file",
+        help="Stellar secret key file used when --submit is set on the stellar layer.",
+    )
+    parser.add_argument("--yes", action="store_true", help="Confirm live identity submit.")
     args = parser.parse_args()
 
     if not args.revoke and not args.handle:
@@ -203,6 +211,25 @@ def main() -> int:
 
     if args.submit and not submitted:
         return 3
+    if submitted:
+        if args.chain == "stellar":
+            if not args.secret_key_file:
+                print("--secret-key-file is required to submit a Stellar identity binding", file=sys.stderr)
+                return 1
+            cmd = [
+                "node",
+                str(SCRIPT_DIR / "link_identity_stellar.mjs"),
+                "--secret-key-file",
+                args.secret_key_file,
+            ]
+            if args.revoke:
+                cmd.append("--revoke")
+            elif args.handle:
+                cmd.extend(["--handle", args.handle])
+            if args.yes:
+                cmd.append("--yes")
+            result = subprocess.run(cmd, check=False)
+            return result.returncode or 0
     return 0
 
 

@@ -1,0 +1,10 @@
+export type Direction = "maximize" | "minimize";
+export declare const BIPS_DENOMINATOR = 10000n;
+export declare const MAX_BIPS = 10000;
+export declare const MAX_METRIC_SCALE = 4294967295n;
+export declare const I128_MIN: bigint;
+export declare const I128_MAX: bigint;
+export declare function scaleMetric(metric: string, scale: bigint, direction: Direction): bigint;
+export declare function improvementThreshold(incumbent: bigint, improvementBips: number): bigint;
+export declare function isSufficient(score: bigint, incumbent: bigint, improvementBips: number): boolean;
+export declare function assertI128(score: bigint): void;

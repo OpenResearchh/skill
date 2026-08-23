@@ -71,8 +71,8 @@ export function ensureRepo(dir) {
 export function fetchCommit({ dir, remote, commit, depth = 1 }) {
   assertAllowedRemote(remote);
   ensureRepo(dir);
-  if (!/^[0-9a-f]{40}$/i.test(String(commit))) {
-    throw new Error(`commit must be a full 40-character sha, got '${commit}'`);
+  if (!/^[0-9a-f]{40}$/i.test(String(commit)) && !/^[0-9a-f]{64}$/i.test(String(commit))) {
+    throw new Error(`commit must be a full 40- or 64-character sha, got '${commit}'`);
   }
 
   // Servers may refuse to serve arbitrary object ids; fall back to a full

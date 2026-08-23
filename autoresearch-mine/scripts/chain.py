@@ -16,8 +16,8 @@ import json
 import os
 from pathlib import Path
 
-DEFAULT_CHAIN = "solana"
-SUPPORTED_CHAINS = ("solana", "0g")
+DEFAULT_CHAIN = "stellar"
+SUPPORTED_CHAINS = ("stellar", "solana", "0g")
 
 # `network_state.source` describes where the frontier came from, not where the
 # project settles; "manual" and "registry" say nothing about the layer.

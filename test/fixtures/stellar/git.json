@@ -1,0 +1,64 @@
+{
+  "repositories": [
+    {
+      "input": "https://GitHub.com/OpenResearch/Protocol.git",
+      "normalized": "github.com/OpenResearch/Protocol"
+    },
+    {
+      "input": "ssh://git@GITHUB.COM/OpenResearch/Protocol.git",
+      "normalized": "github.com/OpenResearch/Protocol"
+    },
+    {
+      "input": "git@github.com:OpenResearch/Protocol.git",
+      "normalized": "github.com/OpenResearch/Protocol"
+    },
+    {
+      "input": "/github.com/OpenResearch/Protocol/",
+      "normalized": "github.com/OpenResearch/Protocol"
+    }
+  ],
+  "repositoryHash": {
+    "normalized": "github.com/OpenResearch/Protocol",
+    "sha256": "eb787e26f219351f1e4f62a32013816e4e3f21c8b8c9abc43d8a38e9240ac5e1"
+  },
+  "commits": [
+    {
+      "hex": "0123456789abcdef0123456789abcdef01234567",
+      "tag": "Sha1"
+    },
+    {
+      "hex": "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
+      "tag": "Sha256"
+    }
+  ],
+  "protocol": {
+    "bytesHex": "000102ff0a",
+    "sha256": "e32f0d62288c85119349a5519afbd5617a4ca4f84ceee9ca836812e8b982d5e2"
+  },
+  "tree": {
+    "entries": [
+      {
+        "path": "src/main.ts",
+        "mode": "100644",
+        "blobHex": "636f6e736f6c652e6c6f672827686927293b0a"
+      },
+      {
+        "path": "README.md",
+        "mode": "100644",
+        "blobHex": "232044656d6f0a"
+      },
+      {
+        "path": "link",
+        "mode": "120000",
+        "blobHex": "524541444d452e6d64"
+      },
+      {
+        "path": "bin/run",
+        "mode": "100755",
+        "blobHex": "0001ff"
+      }
+    ],
+    "serializationHex": "31303036343420524541444d452e6d64003700232044656d6f0a003130303735352062696e2f72756e0033000001ff00313230303030206c696e6b003900524541444d452e6d6400313030363434207372632f6d61696e2e747300313900636f6e736f6c652e6c6f672827686927293b0a00",
+    "sha256": "85d6931394d4789753105879e724a3fda821de8369f54596c32f9d5915c35282"
+  }
+}

@@ -1,6 +1,46 @@
 # autoresearch-mine
 
-Mining starts from either a finalized local `protocol.json` plus repo checkout, a Solana OpenResearch project id / Irys manifest, or a legacy on-chain 0G project id / ProjectToken address.
+Mining starts from either a finalized local `protocol.json` plus repo checkout,
+or a published project id. **Stellar is the default settlement layer.** Solana
+and 0G remain explicit alternates (`--chain solana` / `--chain 0g`).
+
+## Stellar (default)
+
+Create a dedicated miner secret before bootstrap. Do not ask the user for a
+seed phrase. Ask them only to fund the printed public key and for a
+reward-recipient address.
+
+```bash
+node scripts/stellar_open_research.mjs init-identity \
+  --out ~/.config/stellar/arah-mine-<project_id>.secret
+node scripts/stellar_open_research.mjs address \
+  --secret-key-file ~/.config/stellar/arah-mine-<project_id>.secret
+```
+
+Bootstrap and submit:
+
+```bash
+node scripts/bootstrap_project.mjs \
+  --project-id <id> \
+  --output-dir /path/to/mining-work/project \
+  --repo-url https://github.com/owner/repo.git \
+  --prepare-repo
+
+python3 scripts/submit_trial_proposal.py \
+  --project-id <id> \
+  --repo-root /path/to/repo \
+  --trial-id <trial_id> \
+  --claimed-metric 1.23 \
+  --reward-recipient G... \
+  --stellar-secret-key-file ~/.config/stellar/arah-mine-<project_id>.secret \
+  --yes
+```
+
+Git mode is live. Do not pass `--legacy-artifact`. The miner must already hold
+the project's `minimum_stake` in the chosen SEP-41 token. Full workflow:
+[SKILL.md](SKILL.md) and [references/onchain-mining-stellar.md](references/onchain-mining-stellar.md).
+
+## Solana (alternate)
 
 For Solana projects, finish CLI and wallet setup before mining so a winning trial can be proposed without another prompt. If `solana --version` is missing, install it locally with the official Solana installer, create or reuse a dedicated miner keypair, ask the user to fund that public key from the faucet, and ask only for the reward-recipient Solana address:
 
@@ -13,6 +53,8 @@ solana balance "$MINER_ADDR"
 ```
 
 Solana proposal submission buys missing project-token stake first with the OpenResearch `buy()` instruction using native SOL, then stakes those tokens in `submit`.
+
+## 0G (alternate)
 
 For legacy 0G on-chain mining, create an isolated mining-wallet keystore (passphrase-encrypted, stored under `~/.autoresearch/wallets/<id>.json`). The skill never reads `ARAH_PRIVATE_KEY` and the keystore is decrypted only inside `wallet.py`, so the trial harness — which runs untrusted protocol code inside a podman/docker/bwrap sandbox — cannot reach the key.
 

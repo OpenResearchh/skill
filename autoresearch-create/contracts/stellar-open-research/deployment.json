@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1",
+  "chain": "stellar",
+  "network": "testnet",
+  "rpcUrl": "https://soroban-testnet.stellar.org",
+  "horizonUrl": "https://horizon-testnet.stellar.org",
+  "networkPassphrase": "Test SDF Network ; September 2015",
+  "openResearchContractId": "CD5EKGUD3Y72UGV2VGQTLUTLOAIGZC6X3LFHARXX2A2D6LBR4IWXAWIQ",
+  "nativeTokenContractId": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+  "explorerContractUrl": "https://lab.stellar.org/r/testnet/contract/CD5EKGUD3Y72UGV2VGQTLUTLOAIGZC6X3LFHARXX2A2D6LBR4IWXAWIQ",
+  "createdAt": "2026-08-23T13:17:43.934Z",
+  "wasmSha256": "2467505b3c7eaf9e419a7ff41f44078cc75f0d71ca19ee326b833e16c291180b",
+  "client": "vendor/openresearch-stellar-client",
+  "notes": "OpenResearch v2 on Stellar testnet. Artifact store is git (GitRef: repo, commit, tree_hash). Token is a SEP-41 contract; the smoke project uses native testnet XLM."
+}

@@ -12,12 +12,13 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-export const DEFAULT_CHAIN = "solana";
-export const SUPPORTED_CHAINS = ["solana", "0g"];
+export const DEFAULT_CHAIN = "stellar";
+export const SUPPORTED_CHAINS = ["stellar", "solana", "0g"];
 
 // operation -> chain -> { script, runner }. Adapters live beside this file.
 const REGISTRY = {
   validateLoop: {
+    stellar: { script: "run_validate_loop_stellar.mjs", runner: "node" },
     solana: { script: "run_validate_loop_solana.mjs", runner: "node" },
     // Adapters are not always at parity. Declaring the gap lets the neutral
     // entrypoint name the missing option and its replacement, instead of

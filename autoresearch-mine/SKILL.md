@@ -25,16 +25,15 @@ Mining never names a settlement layer. The neutral entrypoints — `bootstrap_pr
 
 1. `--chain <name>` on the command line
 2. `ARAH_CHAIN` in the environment
-3. `.autoresearch/chain.json` in the work tree, e.g. `{"chain":"solana"}`
+3. `.autoresearch/chain.json` in the work tree, e.g. `{"chain":"stellar"}`
 4. the layer recorded by a previous bootstrap in `.autoresearch/mine/network_state.json`
 5. the built-in default
 
-Supported names are `solana` and `0g`; `solana` is the default. Pass **`--show-chain`** (or set **`ARAH_SHOW_CHAIN=1`**) to print which layer and adapter were selected — do that first whenever a bootstrap or submit fails in a way that looks layer-specific. Unknown flags are forwarded to the adapter unchanged, so layer-specific options stay reachable without appearing in this workflow.
-
-**`submit_trial_proposal.py` is the exception:** it reads `--chain` / `ARAH_CHAIN` only and does **not** read `.autoresearch/chain.json`, so always pass `--chain` explicitly on the submit call rather than relying on the file.
+Supported names are `stellar`, `solana`, and `0g`; **`stellar` is the default.** Pass **`--show-chain`** (or set **`ARAH_SHOW_CHAIN=1`**) to print which layer and adapter were selected — do that first whenever a bootstrap or submit fails in a way that looks layer-specific. Unknown flags are forwarded to the adapter unchanged, so layer-specific options stay reachable without appearing in this workflow.
 
 Layer detail lives in the reference docs, not here:
 
+- `stellar` → [`references/onchain-mining-stellar.md`](references/onchain-mining-stellar.md)
 - `solana` → [`references/onchain-mining-solana.md`](references/onchain-mining-solana.md)
 - `0g` → [`references/onchain-mining-0g.md`](references/onchain-mining-0g.md)
 
@@ -47,30 +46,22 @@ object by its id and having git accept it *is* the integrity check. This is
 also what preserves authorship — the miner's commits survive into the project's
 history instead of arriving as an anonymous snapshot.
 
-`tree_hash` is not there to prove the host served the right commit. Its job is
-SHA-1 hardening: git commit ids are SHA-1 and this system has money attached,
-so a second independent SHA-256 commitment means a SHA-1 collision alone is not
-enough to swap the code a proposal points at. Compute it only with
-**`tree_hash.py`** — never by hashing `git archive` output, which varies with
-git version and `export-subst` / `export-ignore` gitattributes, so two honest
-machines would disagree and every proposal would fail verification.
+`tree_hash` on Stellar is computed by the vendored OpenResearch client
+(`mode SP path NUL length NUL blob NUL`). Do not hash `git archive` output and
+do not use `tree_hash.py` for Stellar settlement — that helper is the Solana
+git-primary format and will not match on-chain GitRef bytes.
 
 Consequences for the loop:
 
 1. Publish the winning commit with **`push_candidate_branch.sh`** before
    submitting. A commit a verifier cannot fetch cannot be scored.
 2. **Do not open pull requests.** Verifiers settle on-chain and merge the
-   accepted work; the same allowlist holds both powers, so there is no separate
-   identity whose compromise moves money. A miner-opened PR is noise at best.
-3. **Never force-push and never rewrite published history.** The proposal is
-   bound to a commit; rewriting it invalidates the artifact under review.
+   accepted work.
+3. **Never force-push and never rewrite published history.**
 
-> **Ahead of the contract.** No deployed settlement layer stores a git ref yet.
-> `submit_trial_proposal.py` runs in git mode by default, computes and records
-> the proposal, and exits **3** to say the active layer cannot accept it. Pass
-> **`--legacy-artifact`** for a live submission today: that archives the tree
-> and submits a storage id to the contract that is actually deployed, while
-> still recording the commit it came from.
+On Stellar, `submit_trial_proposal.py` git mode is live. Pass
+`--stellar-secret-key-file` and `--yes`. Use `--legacy-artifact` only for
+Solana or 0G projects that still expect uploaded tarballs.
 
 ## Identity and funding
 
@@ -82,7 +73,7 @@ Mining that settles proposals needs an identity on the active settlement layer t
 
 > **Reward recipient:** keep `--reward-recipient` set to the user's main wallet, never the mining identity. The mining identity only ever holds fees + stake, so a compromised mining key bounds the loss to one trial's stake + fees instead of accumulated rewards.
 
-Never ask the user for a private key or seed phrase, and never put one in `.env`. Where a layer's adapter needs a local signing key, it stays in a passphrase-encrypted keystore that only the adapter's own wallet helper decrypts, so the trial harness — which runs untrusted code inside the sandbox — cannot reach it.
+Never ask the user for a private key or seed phrase, and never put one in `.env`. On Stellar the miner signs with a dedicated secret-key file (`S…` on one line, mode 0600) generated locally with `stellar_open_research.mjs init-identity`. On 0G the key stays in a passphrase-encrypted keystore. The trial harness must not be able to read either.
 
 The exact CLI install command, identity generation, funding source, balance check, and stake preflight for the active layer are in that layer's reference doc listed above. Follow its preflight section before bootstrap, artifact download, or any trial work.
 
@@ -133,6 +124,8 @@ These configure one settlement layer's adapter and are not part of the primary f
 
 | Variable | Layer | Purpose |
 |----------|-------|---------|
+| `ARAH_STELLAR_RPC_URL` / `ARAH_STELLAR_CONTRACT_ID` | `stellar` | Stellar RPC and contract overrides |
+| `ARAH_STELLAR_TOKEN` | `stellar` | SEP-41 token override |
 | `ARAH_DEPLOYMENT_JSON` | `0g` | Path to `deployment.json` (default: bundled `contracts/0g-galileo-testnet/deployment.json`). |
 | `ARAH_RPC_URL` | `0g` | Override RPC (default in deployment). |
 | `ARAH_CHAIN_ID` | `0g` | Override chain id (default **16602**). |
@@ -179,17 +172,18 @@ Optional **AXL sidechat** writes miner-to-miner field notes to **`sidechat.jsonl
 | `references/workflow.md` | Phase 1 to Phase 2 workflow diagram and limits/frontier notes. |
 | `references/contracts-sync.md` | Maintainer instructions for refreshing vendored deployment + ABI artifacts from `autoresearch-create`. |
 | `references/vendor-harness.md` | Maintainer instructions for refreshing vendored harness scripts from `autoresearch-create`. |
-| `references/onchain-mining-solana.md` | Miner setup, artifact download, and proposal-submit detail for the `solana` layer. |
-| `references/onchain-mining-0g.md` | Miner setup, hash rules, and submit order for the `0g` layer. |
+| `references/onchain-mining-stellar.md` | Miner setup, GitRef hashing, bootstrap, and live git submit for the default `stellar` layer. |
+| `references/onchain-mining-solana.md` | Miner setup, artifact download, and proposal-submit detail for the `solana` alternate. |
+| `references/onchain-mining-0g.md` | Miner setup, hash rules, and submit order for the `0g` alternate. |
 | `vendor/harness/` | Vendored `run_baseline.sh`, `run_measured_trials.sh`, `aggregate_samples.py`, `derive_trial_seed.py`, `_log.sh`, `_log.py`, `preview_metrics.py` trial harness. |
 | `scripts/_resolve_create_scripts.sh` | Resolve harness directory (default `vendor/harness`, override via env). |
 | `scripts/chain.mjs` | Settlement-layer resolution and the operation → adapter registry. The only file that maps `bootstrap` / `submitProposal` onto a concrete implementation. |
 | `scripts/bootstrap_project.mjs` | **Fetch a published project and prepare a working tree.** Neutral entrypoint: `--project-id`, `--output-dir`, `--repo-root`, `--prepare-repo`, `--skip-existing`, `--chain`, `--show-chain`; other flags pass through to the adapter. |
-| `scripts/submit_trial_proposal.py` | **Submit a winning trial as a proposal.** Default git mode records `base_commit` / `head_commit` / `tree_hash` after confirming the commit is published. `--legacy-artifact` archives the tree and dispatches to the adapter selected by `--chain`. |
+| `scripts/submit_trial_proposal.py` | **Submit a winning trial as a proposal.** Default git mode records `base_commit` / `head_commit` / `tree_hash` after confirming the commit is published, then submits live on Stellar. `--legacy-artifact` archives the tree for Solana/0G. |
 | `scripts/push_candidate_branch.sh` | **Publish the winning commit** to the project repo under a collision-free branch. Never force-pushes, never opens a PR, refuses a dirty tree or a branch that already holds different content. |
-| `scripts/tree_hash.py` | Canonical SHA-256 tree commitment. The single definition shared by miner and verifier — do not reimplement it. |
+| `scripts/tree_hash.py` | Solana git-primary SHA-256 tree commitment. Stellar hashing uses the vendored client via `stellar_open_research.mjs git-ref`. |
 | `scripts/git_artifacts.mjs` | Fetch / check out / verify a commit from git (transport allowlist, tree-hash verification). Used by the git-mode bootstrap. |
-| `scripts/link_identity.py` | Optional, revocable, miner-signed binding of a code-hosting handle to the mining address, so accepted work shows up on a real profile. Emits the payload and the plan; the contract instruction is not deployed yet. |
+| `scripts/link_identity.py` | Optional, revocable, miner-signed binding of a code-hosting handle to the mining address. On Stellar, `--submit --secret-key-file --yes` sends `link_identity`. |
 | `scripts/read_mining_limits.py` | Print `max_trials`, `max_session_wall_seconds`, `max_stagnant_trials`, `stop_after_pr`, and optionally **`on_chain_project_id`** (if `miningLoop.onChainProjectId` or **`ARAH_PROJECT_ID`** is set). |
 | `scripts/init_mine_workspace.sh` | Create `.autoresearch/mine` tree. |
 | `scripts/bootstrap_repo.sh` | Clone or reuse repo from protocol `meta.repo`. |
@@ -217,6 +211,12 @@ Do not call these from the workflow; the neutral entrypoints select the right on
 
 | Resource | Layer | Role |
 |----------|-------|------|
+| `scripts/bootstrap_from_stellar.mjs` | `stellar` | Bootstrap adapter: checkout the incumbent GitRef, verify the Stellar tree hash and protocol hash, init the workspace, sync `network_state.json` from baseline or current best. |
+| `scripts/submit_proposal_stellar.mjs` | `stellar` | Submit adapter: live `submit` with a candidate GitRef and escrowed stake. |
+| `scripts/link_identity_stellar.mjs` | `stellar` | `link_identity` / `unlink_identity`. |
+| `scripts/stellar_open_research.mjs` | `stellar` | Client factory, GitRef construction, scoring, identity files. |
+| `contracts/stellar-open-research/` | `stellar` | Testnet deployment metadata. |
+| `vendor/openresearch-stellar-client/` | `stellar` | Vendored OpenResearch v2 TypeScript client. |
 | `scripts/bootstrap_from_solana.mjs` | `solana` | Bootstrap adapter. **Git mode** when the project record names a commit: clone/fetch, check out, verify the tree hash, and take `protocol.json` from the tree. **Storage mode** otherwise: download artifacts by their recorded ids, verify hashes, unpack. Both init the workspace and sync `network_state.json`. |
 | `scripts/download_irys_artifacts.mjs` | `solana` | Lower-level artifact downloader by id/tag with SHA-256 verification. |
 | `scripts/submit_proposal_solana.mjs` | `solana` | Submit adapter: builds/sends the proposal with code/log hashes and stake accounts. |
@@ -250,10 +250,10 @@ work, so a winning trial can be proposed without stopping to ask.
 4. Ask the user for the **reward-recipient** address and record it now. Keep it
    pointed at the user's main wallet, never the mining identity.
 
-Stake is handled for you: the proposal submitter buys any missing stake from
-the project's reward token immediately before submitting. Override the quoted
-buy amount or disable the auto-buy only for diagnostic runs where submission is
-expected to fail — both are layer-specific flags documented in the reference.
+On Stellar the miner must already hold `minimum_stake` of the project's SEP-41
+token (stroops when the token is native XLM). There is no bonding-curve
+auto-buy. Solana and 0G adapters may buy missing stake immediately before
+submit; those flags are layer-specific and documented in their reference docs.
 
 If the layer's preflight reports that the identity is not ready, report the
 missing funding condition and stop rather than spending compute on trials.
@@ -266,6 +266,7 @@ missing funding condition and stop rather than spending compute on trials.
 node scripts/bootstrap_project.mjs \
   --project-id <project_id> \
   --output-dir /path/to/mining-work/project \
+  --repo-url https://github.com/owner/repo.git \
   --prepare-repo
 ```
 
@@ -274,20 +275,14 @@ tree, **verifies the code before it can be used for mining**, initializes
 `.autoresearch/mine`, and prints the resolved protocol and repo paths. Continue
 the loop with those paths.
 
-How the tree is prepared depends on what the project record carries:
+On Stellar (the default) the tree is always a git checkout of the live
+incumbent GitRef. Pass `--repo-url <https-or-ssh-url>` — the chain stores
+`sha256` of the client-normalized `host/owner/repo` (host lowercased, owner/repo
+case preserved), which cannot be reversed into a URL, so the URL comes from you
+and is then checked against that commitment.
 
-- **Git** (record names a commit): clones/fetches the repo, checks out the
-  commit detached, verifies the canonical tree hash, stamps the starting point
-  into `refs/openresearch/base`, and takes `protocol.json` from the tree. Pass
-  `--repo-url <https-or-ssh-url>` — the chain stores `sha256("host/owner/repo")`,
-  which cannot be reversed into a URL, so the URL comes from you and is then
-  checked against that commitment. Add `--protocol-file <path>` if the repo does
-  not carry `protocol.json`.
-- **Stored artifacts** (record names storage ids): downloads the protocol / repo
-  snapshot / benchmark / baseline artifacts, verifies every file's hash, and
-  unpacks the snapshot. This is the fallback for every project published so far.
-
-`--git-mode auto` (the default) picks between them; `on` / `off` force one.
+Solana/0G projects may still carry uploaded archives. Those adapters fall back
+to hash-verified downloads; `--git-mode auto` is Solana-only.
 
 Useful additions: `--repo-root <path>` to control where the working tree is
 created, `--skip-existing` to reuse verified downloads, and `--show-chain` when
@@ -391,49 +386,38 @@ approval — call **`submit_trial_proposal.py`** immediately.
 
 ```bash
 python3 ./submit_trial_proposal.py \
-  --chain <layer> \
   --project-id <project_id> \
   --repo-root /path/to/repo \
   --trial-id <trial_id> \
   --claimed-metric 1.23 \
   --reward-recipient <user-main-wallet-address> \
+  --stellar-secret-key-file ~/.config/stellar/arah-mine.secret \
   --yes
-# add --legacy-artifact for a live submission to a deployed contract,
-# plus the active layer's signing-identity flag — see its reference doc
 ```
 
-**Git mode (default).** Confirms the head commit is published, resolves
-`base_commit`, computes `tree_hash` with `tree_hash.py`, and writes
-`.autoresearch/mine/submissions/<trial_id>/proposal.json`. It exits **3**
-because no deployed contract stores a git ref yet; the payload is still on
-disk. `base_commit` is taken from `--base-commit`, then the `refs/openresearch/base`
-ref a git-mode bootstrap leaves behind, then the tracked upstream or the
-remote's default branch — and it errors rather than guessing, because an
-invented base makes the proposal claim a diff the miner never made.
+**Git mode (default, live on Stellar).** Confirms the head commit is published,
+resolves `base_commit` from `--base-commit`, then `refs/openresearch/base`, then
+the tracked upstream, and computes `tree_hash` with the Stellar client (not
+`tree_hash.py`). It then submits `submit` on-chain. `base_commit` must match
+the live incumbent or the contract returns `BaseCommitMismatch`.
 
-**Legacy mode (`--legacy-artifact`).** What works against the deployed
-contracts today: archives the tree to
+**Legacy mode (`--legacy-artifact`).** Solana and 0G only: archives the tree to
 `.autoresearch/mine/submissions/<trial_id>/repo-snapshot.tar`, pairs it with
 `.autoresearch/mine/runs/<trial_id>/stdout.log`, hashes both, and dispatches to
-the adapter for `--chain`. It records the commit and tree hash in
-`submission.json` too, so the submission can be correlated with its commit once
-the git-aware contract lands.
+that layer's adapter.
 
-Pass `--chain` explicitly: unlike `bootstrap_project.mjs`, this script reads
-only `--chain` and `ARAH_CHAIN`, not `.autoresearch/chain.json`. It errors out
-if the layer's required identity flag is missing, so read the reference doc
-before the first live submit.
+The script resolves the layer the same way bootstrap does (`--chain`,
+`ARAH_CHAIN`, `.autoresearch/chain.json`, then the default). It errors out if
+the layer's required identity flag is missing.
 
 `--reward-recipient` must be the user's main wallet, not the mining identity:
 that way mining-key compromise can only cost one trial's worth of stake + fees,
 not accumulated rewards.
 
-In legacy mode the submitter acquires any missing stake automatically. Use
-`--no-auto-buy` only for diagnostic runs where submission is expected to fail
-without existing stake. Use `--dry-run` to verify hashes and the settlement plan
-without signing; the identity/plan flags that a dry run needs are layer-specific
-and listed in that layer's reference doc, along with the hashing rule (SHA-256
-of file bytes) and metric scale.
+On Stellar the miner must already hold `minimum_stake` of the project token.
+Solana/0G legacy mode may buy missing stake automatically; use `--no-auto-buy`
+only for diagnostic runs. Use `--dry-run` to verify hashes and the settlement
+plan without signing.
 
 **Do not open a pull request.** Verifiers settle on-chain and merge the accepted
 work; the candidate branch is how it becomes fetchable, not a request to merge.
@@ -445,14 +429,15 @@ work shows up on a real profile:
 
 ```bash
 python3 ./link_identity.py --handle <github-handle> --address <mining address> \
-  --repo-root /path/to/repo
-# --revoke emits the unlink payload
+  --repo-root /path/to/repo \
+  --secret-key-file ~/.config/stellar/arah-mine.secret \
+  --submit --yes
+# --revoke unlinks
 ```
 
 Optional, revocable, and miner-signed — nothing in settlement reads it, so a
 miner who wants to stay pseudonymous loses no reward. Ask the user before
-running it; never link a handle they did not give you. The contract instruction
-is not deployed yet, so the command emits the payload and prints the plan.
+running it; never link a handle they did not give you.
 
 ### 9. Optional AXL sidechat
 
@@ -494,7 +479,7 @@ Use sidechat only for side conversation: experiment hints, failed-hypothesis mem
 | `push_candidate_branch.sh` | 0 pushed / already published / `--dry-run`; 1 usage; 2 not a repo, dirty tree, or unresolvable commit; **3** remote rejected by the transport allowlist; **4** branch exists with different content; **5** push failed. |
 | `submit_trial_proposal.py` | 0 submitted (or git-mode `--dry-run`); 1 args / dirty repo / missing trial log / unresolvable `base_commit` / submit failure; **3** git mode prepared but the active layer has no git-artifact contract; **4** head commit not published on the project repo. |
 | `tree_hash.py` | 0 hash printed (and matched `--verify`); 2 usage or not a git repo; **3** `--verify` mismatch; **4** unhashable entry (submodule or unknown mode). |
-| `link_identity.py` | 0 payload written; 1 bad args / invalid handle / IO; **3** `--submit` requested but no deployed contract has `link_identity`. |
+| `link_identity.py` | 0 payload written (and submitted on Stellar); 1 bad args / invalid handle / IO; **3** `--submit` requested but the active layer has no `link_identity`. |
 | `capture_trace.py` | 0 (also when capture is disabled); 1 bad args / IO / schema failure. |
 | `append_trial_record.py` | 0; 1 validation; 2 IO. |
 | `axl_sidechat_send.py` | 0 sent / disabled / no peers; 1 invalid input or every configured peer failed. |
@@ -511,6 +496,8 @@ Surfaced through the neutral entrypoints, which pass the adapter's status up unc
 
 | Script | Layer | Codes |
 |--------|-------|-------|
+| `bootstrap_from_stellar.mjs` | `stellar` | 0 bootstrapped; 1 args / RPC / GitRef fetch / hash verification failure. |
+| `submit_proposal_stellar.mjs` | `stellar` | 0 submitted; 1 args / frozen project / base mismatch / signing failure. |
 | `bootstrap_from_solana.mjs` | `solana` | 0 bootstrapped; 1 args / RPC / artifact download / hash verification / unpack failure. |
 | `download_irys_artifacts.mjs` | `solana` | 0 downloaded; 1 args / download / SHA-256 verification failure. |
 | `submit_proposal_solana.mjs` | `solana` | 0 submitted; 1 args / balance / RPC / signing failure. |

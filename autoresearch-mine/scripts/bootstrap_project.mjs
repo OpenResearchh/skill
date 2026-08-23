@@ -36,7 +36,7 @@ Any other option is passed through to the active adapter unchanged.
 // Flags whose spelling differs per adapter. Everything else passes through, so
 // an operator who needs a chain-specific knob is never blocked by this layer.
 const ALIASES = {
-  "--prepare-repo": { solana: "--unpack-repo", "0g": "--download-artifacts" },
+  "--prepare-repo": { stellar: "--unpack-repo", solana: "--unpack-repo", "0g": "--download-artifacts" },
 };
 
 function translate(argv, chain) {
