@@ -27,8 +27,9 @@ Use the bundled experiment-protocol toolkit in this skill directory. Do not modi
 - `scripts/run_measured_trials.sh`: repeated-sample wrapper around `run_baseline.sh`; prints `AGGREGATE_METRIC=` and writes the full sample. Used by the mine skill's trial harness.
 - `scripts/publish_project.mjs`: **the publish entrypoint.** Resolves the active settlement layer and delegates to that layer's adapter. Accepts `--chain <name>`, `--show-chain`, and forwards every other flag to the adapter unchanged.
 - `scripts/chain.mjs`: settlement-layer resolution and the operation → adapter registry. The only file that maps `publishProject` onto a concrete implementation.
-- `scripts/tree_hash.py`: canonical SHA-256 commitment to the tree at a commit. The publish step calls it; run it directly to check a commitment: `python3 scripts/tree_hash.py --repo-root <path> --commit <sha> [--verify <hex>]`.
+- `scripts/tree_hash.py`: legacy adapter SHA-256 commitment to the tree at a commit. Stellar ABI v3 uses `stellar_open_research.mjs` / `@openresearch/stellar-client` for the contract-compatible tree hash.
 - `scripts/git_artifacts.mjs`: fetch, check out, and verify a commit from an allowed remote. Shared with the mine and validate skills so all three agree on what a published commit contains.
+- `references/onchain-stellar.md`: setup, identity, and publish detail for the `stellar` settlement layer.
 - `references/onchain-solana.md`: setup, identity, storage, and publish detail for the `solana` settlement layer.
 - `references/onchain-0g-galileo.md`: setup, identity, storage, and publish detail for the `0g` settlement layer.
 - `workflow.md`: detailed phase diagram. Read it when the user asks for process detail.
@@ -37,6 +38,7 @@ Use the bundled experiment-protocol toolkit in this skill directory. Do not modi
 
 Do not call these directly from the workflow; `publish_project.mjs` selects the right one. They are listed so the files are identifiable when a reference doc names them.
 
+- `scripts/publish_project_stellar.mjs`, `scripts/stellar_open_research.mjs`: the `stellar` adapter and shared Stellar/Soroban client helpers. Uses the sibling `smart-contracts` ABI v3 deployment metadata.
 - `scripts/publish_project_solana.mjs`, `scripts/local_solana_wallet_publish.mjs`, `scripts/solana_open_research.mjs`, `contracts/solana-open-research/*`: the `solana` adapter, its browser-wallet signing page, client helpers, and bundled deployment metadata plus full Anchor IDL.
 - `scripts/irys_storage.mjs`: uploads for the legacy artifact model only. It is no longer on the settlement path; a normal publish never touches it.
 - `scripts/publish_project_0g.mjs`, `scripts/publish_project_0g_lib.mjs`, `contracts/0g-galileo-testnet/*`: the `0g` adapter, its shared input-preparation library, and bundled deployment metadata plus ABI artifacts.
@@ -217,10 +219,10 @@ Do not publish anything until the user approves and the identity requirements be
 
 1. `--chain <name>` on the command line
 2. `ARAH_CHAIN` in the environment
-3. `.autoresearch/chain.json` in the working directory, e.g. `{"chain":"solana"}`
+3. `.autoresearch/chain.json` in the working directory, e.g. `{"chain":"stellar"}`
 4. the built-in default
 
-Supported names are `solana` and `0g`; `solana` is the default. Pass `--show-chain` (or set `ARAH_SHOW_CHAIN=1`) to print which layer and adapter were selected — do that first whenever a publish fails in a way that looks layer-specific. Any flag `publish_project.mjs` does not recognize is forwarded to the adapter unchanged, so layer-specific options stay reachable without appearing in this workflow.
+Supported names are `stellar`, `solana`, and `0g`; `stellar` is the default. Pass `--show-chain` (or set `ARAH_SHOW_CHAIN=1`) to print which layer and adapter were selected — do that first whenever a publish fails in a way that looks layer-specific. Any flag `publish_project.mjs` does not recognize is forwarded to the adapter unchanged, so layer-specific options stay reachable without appearing in this workflow.
 
 ### What gets published
 
@@ -242,12 +244,13 @@ The publish writes `storage_git.json` next to the protocol bundle, which records
 
 ### Identity and funding
 
-Publishing requires an identity on the active settlement layer that can sign the registration and pay for it. The default signing path is a temporary localhost page: the CLI prints a `http://127.0.0.1:<port>/...` URL, the user connects their existing wallet in the browser, and that wallet — never this skill — signs and pays.
+Publishing requires an identity on the active settlement layer that can sign the registration and pay for it. The signing path is adapter-specific: some layers use a browser wallet bridge, while Stellar automation uses a locally configured signer for the creator address.
 
 **Do not ask the user for a private key, seed phrase, or API key.** A headless signing path exists for automation; use it only when the user explicitly opts in, and read the reference first because it changes what the publish can do.
 
 Read the reference for the active layer before preparing the publish, and follow its setup steps exactly:
 
+- `stellar` → `references/onchain-stellar.md`
 - `solana` → `references/onchain-solana.md`
 - `0g` → `references/onchain-0g-galileo.md`
 
@@ -262,7 +265,7 @@ Prepare arguments from the approved protocol and the checkout the baseline ran i
 - `--baseline-commit`: the commit to pin. Defaults to `HEAD` of `--repo-root`. Accepts any ref; the adapter resolves it to a full sha.
 - `--repo-url`: the canonical remote. Defaults to the checkout's `origin`, then `meta.repo.cloneUrl`. Only `https`, `ssh`, and `git@` remotes are accepted.
 - `--baseline-aggregate-score`: the agreed signed integer representation of the approved primary metric. Ask the user to confirm scaling for decimal metrics, or pass `--baseline-metric <decimal> --metric-scale <integer>` and let the CLI scale deterministically.
-- `--token-name`, `--token-symbol`, `--base-price`, `--slope`, `--miner-pool-cap`: reward-token parameters. Ask the user if not already specified. The units of `--base-price` and `--slope` are layer-specific; see the reference doc.
+- Reward-token and stake parameters are layer-specific. For Stellar, pass an existing SEP-41 token contract plus `--minimum-stake`, `--reward-per-approval`, and `--reward-pool-funding`. For legacy Solana, pass `--token-name`, `--token-symbol`, `--base-price`, `--slope`, and `--miner-pool-cap`. See the active reference doc.
 
 Preferred command shape:
 
@@ -271,11 +274,8 @@ node scripts/publish_project.mjs \
   --protocol-json <output-dir>/protocol.json \
   --repo-root <repo-path> \
   --baseline-aggregate-score <integer-score> \
-  --token-name "<name>" \
-  --token-symbol <symbol> \
-  --base-price <integer> \
-  --slope <integer> \
-  --miner-pool-cap <token-units> \
+  --chain <stellar|solana|0g> \
+  <layer-specific token and funding flags> \
   --yes
 ```
 

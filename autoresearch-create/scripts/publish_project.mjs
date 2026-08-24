@@ -42,7 +42,7 @@ Any other option is passed through to the active adapter unchanged.
 // Layer-neutral flag -> the flag each adapter actually understands.
 const ALIASES = {
   "--upload-artifacts": { solana: "--upload-artifacts-to-irys", "0g": "--upload-artifacts-to-0g" },
-  "--git-primary": { solana: "--git-primary" },
+  "--git-primary": { stellar: "--git-primary", solana: "--git-primary" },
 };
 
 // Chains whose adapter has no git-primary path. Publishing to them means the

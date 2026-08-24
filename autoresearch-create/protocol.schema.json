@@ -312,7 +312,7 @@
         "onChainProjectId": {
           "type": "integer",
           "minimum": 0,
-          "description": "0G Galileo ProjectRegistry project id (autoresearch-mine: sync_registry_frontier.py). Env ARAH_PROJECT_ID overrides when set."
+          "description": "Published project id on the configured settlement layer. Env ARAH_PROJECT_ID overrides when set."
         }
       }
     },
