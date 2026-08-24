@@ -23,7 +23,7 @@ flowchart TB
     proto[protocol.json]
     render[Render program.md.j2]
     baseline[Dry run plus baseline log]
-    publish[Ask to publish on Solana]
+    publish[Ask to publish on settlement layer]
   end
 
   subgraph phase2 [Phase 2 — Experiment loop]
@@ -79,7 +79,7 @@ flowchart LR
     PR[protocol.json finalized]
     MD[program.md rendered]
     BL[Baseline row plus optional run.log]
-    OC[On-chain project id plus token address]
+    OC[On-chain project id plus settlement record]
   end
 
   A --> S
@@ -100,7 +100,7 @@ flowchart LR
   BL --> OC
 ```
 
-**Reading left to right:** the human or automation starts from a **repo URL** (or `--existing-repo`). **`build_discovery_bundle`** is the main **entry point** that produces the **prompt bundle** (`discovery_user_filled.md`, `discovery_system.md`, `bundle_meta.json`). The **LLM** consumes those files and emits **`DiscoveryDraft` JSON**. The **questionnaire** plus merge step produces **`protocol.json`**, optional **`program.md`** via **Jinja**, and a **baseline** artifact after a **dry run**. If the project is eligible, the agent asks the user whether to publish to the Solana OpenResearch registry as the next step (0G Galileo remains an alternate path).
+**Reading left to right:** the human or automation starts from a **repo URL** (or `--existing-repo`). **`build_discovery_bundle`** is the main **entry point** that produces the **prompt bundle** (`discovery_user_filled.md`, `discovery_system.md`, `bundle_meta.json`). The **LLM** consumes those files and emits **`DiscoveryDraft` JSON**. The **questionnaire** plus merge step produces **`protocol.json`**, optional **`program.md`** via **Jinja**, and a **baseline** artifact after a **dry run**. If the project is eligible, the agent asks the user whether to publish through the configured settlement layer.
 
 ---
 
@@ -117,8 +117,7 @@ flowchart LR
 | Render narrative | `python scripts/render_program_md.py path/to/protocol.json` (requires `pip install jinja2`) | Human-readable **`program.md`** (not automatic when JSON changes) |
 | Eligibility | `eligibility_rubric.md` | Decide `eligible` / `needs_harness` / `ineligible` |
 | Baseline | Run `execution.command` from protocol on pinned setup | Prove runnable; record first metric row |
-| Publish prompt (default) | `scripts/publish_project_solana.mjs` + `contracts/solana-open-research/deployment.json` + `references/onchain-solana.md` | Upload artifacts to Irys with the Solana browser wallet, then call Solana `createProject` via the localhost bridge after a successful measured baseline |
-| Publish prompt (alternate) | `scripts/publish_project_0g.mjs` + `contracts/0g-galileo-testnet/deployment.json` + `references/onchain-0g-galileo.md` | 0G Galileo EVM `ProjectRegistry.createProject(...)` path; use only when the user explicitly opts in |
+| Publish prompt | `scripts/publish_project.mjs` + active `references/onchain-*.md` | Resolve `--chain` / `ARAH_CHAIN`, prepare the git-primary publish payload, and hand off to the configured settlement adapter |
 
 ---
 
@@ -134,9 +133,10 @@ flowchart LR
 | [`eligibility_rubric.md`](eligibility_rubric.md) | When Phase 1 can stop vs needs harness |
 | [`templates/program.md.j2`](templates/program.md.j2) | Renders agent-facing **`program.md`** |
 | [`archetypes.yaml`](archetypes.yaml) | Defaults and taxonomy reference |
-| [`contracts/solana-open-research/deployment.json`](contracts/solana-open-research/deployment.json) | Solana OpenResearch program id, RPC defaults, and bundled IDL path |
+| [`references/onchain-stellar.md`](references/onchain-stellar.md) | Active Stellar publish flow using ABI v3 GitRef projects |
+| [`contracts/solana-open-research/deployment.json`](contracts/solana-open-research/deployment.json) | Solana adapter program id, RPC defaults, and bundled IDL path |
 | [`contracts/solana-open-research/open_research.json`](contracts/solana-open-research/open_research.json) | Bundled full Anchor IDL for Solana publish, mining, and verifier paths |
-| [`references/onchain-solana.md`](references/onchain-solana.md) | Default Solana publish flow (browser-wallet, PDA seeds) |
+| [`references/onchain-solana.md`](references/onchain-solana.md) | Solana publish flow (browser-wallet, PDA seeds) |
 | [`contracts/0g-galileo-testnet/deployment.json`](contracts/0g-galileo-testnet/deployment.json) | Alternate path: 0G Galileo registry addresses and ABI artifact paths |
 | [`references/onchain-0g-galileo.md`](references/onchain-0g-galileo.md) | Alternate path: ABI-derived 0G Galileo publish, miner, and verifier flow |
 
@@ -151,8 +151,8 @@ flowchart LR
 | **`bundle_meta.json`** | From the bundle script only: clone path, SHA, paths to schema — audit trail |
 | **`discovery_draft.json`** (retained) | Raw LLM output for debugging / reproducibility |
 | **Baseline record** | Row in `provenance.resultsLog` (e.g. `results.tsv`) + stored log artifact path |
-| **Storage publish record** | `storage_irys.json` (default Solana path) or `storage_0g_galileo.json` (alternate 0G path): artifact paths, SHA-256 digests, Irys ids/gateway URLs, and upload receipts |
-| **On-chain publish record** | Default: `publish_solana.json` with cluster, program id, transaction signature, project id, creator pubkey, accounts, args, and `signedBy` (`browserWallet` or `keypair`). Alternate: `publish_0g_galileo.json` with project id, token address, tx hash, chain id, registry addresses |
+| **Git publish record** | `storage_git.json`: repo identity, baseline commit, tree hash, protocol hash, and materialization command |
+| **On-chain publish record** | `publish_stellar.json`, `publish_solana.json`, or `publish_0g_galileo.json` depending on the configured settlement layer |
 | **`needs_harness` follow-ups** | If rubric says so: issues or scripts to add before **`eligible`** |
 
 Phase 2 **only** needs the **protocol bundle** ( **`protocol.json`** + baseline policy + optional **`program.md`** ); it does **not** need to re-run discovery unless the repo or contract changes.

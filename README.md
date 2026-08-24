@@ -1,10 +1,10 @@
 # OpenResearch
 
-> A decentralized protocol for benchmark-driven, agent-run scientific research on Solana.
+> A decentralized protocol for benchmark-driven, agent-run scientific research over pluggable settlement layers.
 
 ## What is OpenResearch?
 
-OpenResearch is a protocol that turns code improvement into proof of work. Researchers publish a project — a real codebase plus a deterministic benchmark — on Solana. Anyone can run an AI coding agent locally that iterates on the code, keeps only changes that beat the current best benchmark score, and submits the improvement on-chain. A network of verifiers re-runs the benchmark inside secure TEE enclave, attests to the result, and the miner is rewarded in the project's own SPL token.
+OpenResearch is a protocol that turns code improvement into proof of work. Researchers publish a project — a real codebase plus a deterministic benchmark — to a configured settlement layer. Anyone can run an AI coding agent locally that iterates on the code, keeps only changes that beat the current best benchmark score, and submits the improvement on-chain. Verifiers re-run the benchmark in a sandbox, settle the result, and accepted commits advance the project's frontier.
 
 In short: **if a benchmark can objectively score code, then improving that score is a form of mining.**
 
@@ -15,52 +15,53 @@ Andrej Karpathy's [autoresearch](https://github.com/karpathy/autoresearch) (Marc
 ## How It Works
 
 ```
-Researcher ─► Publishes project (protocol + repo + benchmark + baseline) on Solana
+Researcher ─► Publishes project (protocol + Git baseline + benchmark) on settlement layer
                      │
                      ▼
-              ProjectRegistry PDA + per-project SPL token mint (bonding curve)
+              OpenResearch project frontier + reward/stake token
                      │
 Miner ─► autoresearch-mine loop ─► beats current best ─► submits proposal + stake
                      │
                      ▼
-Verifier ─► autoresearch-validate ─► re-runs benchmark in TEE ─► approve / reject
+Verifier ─► autoresearch-validate ─► re-runs benchmark ─► approve / reject
                      │
                      ▼
-              Approved: stake returned + reward minted to miner
-              Rejected: stake slashed across verifier pool + burn
+              Approved: stake returned + reward paid
+              Rejected: stake slashed
 ```
 
 ## Technology Partners
 
 | Partner | Role |
 |---|---|
-| **[Solana](https://solana.com)** | Settlement layer — `open_research` Anchor program, PDAs, SPL Token rewards |
-| **[Irys](https://irys.xyz)** | Permanent, content-addressed storage for protocol, repo snapshot, benchmark bundle, and baseline metrics |
-| **[Anchor](https://www.anchor-lang.com)** | Solana program framework + IDL |
+| **[Stellar](https://stellar.org)** | Active settlement layer — Soroban `OpenResearch` ABI v3 with GitRef projects and proposals |
+| **Solana / 0G adapters** | Legacy and alternate settlement adapters retained behind the same neutral entrypoints |
+| **Git** | Content-addressed artifact transport for baselines and candidate commits |
 | **[Gensyn AXL](https://gensyn.ai)** | Optional miner-to-miner sidechat for sharing experiment notes |
 | **Intel TDX / AMD SEV** | TEE attestation for verifier benchmark reruns |
 
-## Solana Deployment
+## Active Stellar Deployment
 
 | Field | Value |
 |---|---|
-| Program | [`ACfzPQJkUJ74bdnmvV6FmB8Me3s1cPA3ayWjt2vHRsv3`](https://explorer.solana.com/address/ACfzPQJkUJ74bdnmvV6FmB8Me3s1cPA3ayWjt2vHRsv3?cluster=devnet) |
-| Network | `devnet` |
-| RPC | `https://api.devnet.solana.com` |
-| Anchor IDL | [`idl/open_research.json`](idl/open_research.json) |
-| Helper module | [`autoresearch-create/scripts/solana_open_research.mjs`](autoresearch-create/scripts/solana_open_research.mjs) |
-| Publish CLI | [`autoresearch-create/scripts/publish_project_solana.mjs`](autoresearch-create/scripts/publish_project_solana.mjs) |
-| Frontend guide | [`open_research/FRONTEND_INTEGRATION_README.md`](open_research/FRONTEND_INTEGRATION_README.md) |
-| Integration tests | [`open_research/TEST_REPORT.md`](open_research/TEST_REPORT.md) |
+| Contract | `CDGF3SS27QEF4LDV63MSMKVOXZOZM4OTF2BPV5QK3PQEAEMOITUVDMDH` |
+| Network | Stellar mainnet |
+| RPC | `https://soroban-rpc.mainnet.stellar.gateway.fm` |
+| Deployment metadata | [`../smart-contracts/deployments/mainnet.json`](../smart-contracts/deployments/mainnet.json) |
+| Helper module | [`autoresearch-create/scripts/stellar_open_research.mjs`](autoresearch-create/scripts/stellar_open_research.mjs) |
+| Publish CLI | [`autoresearch-create/scripts/publish_project.mjs`](autoresearch-create/scripts/publish_project.mjs) |
 
-Frontend env:
+Runtime env:
 
 ```env
-NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
-NEXT_PUBLIC_OPEN_RESEARCH_PROGRAM_ID=ACfzPQJkUJ74bdnmvV6FmB8Me3s1cPA3ayWjt2vHRsv3
+OPEN_RESEARCH_CONTRACT_ID=CDGF3SS27QEF4LDV63MSMKVOXZOZM4OTF2BPV5QK3PQEAEMOITUVDMDH
+STELLAR_RPC_URL=https://soroban-rpc.mainnet.stellar.gateway.fm
+STELLAR_NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015
 ```
 
-Derive PDAs from the program id, pass `bytes32` values as exactly 32 bytes, and treat project tokens as SPL Token mints with `decimals = 0`. Call `initialize` once, then add verifiers with the authority wallet.
+The skills keep settlement details behind `--chain`. `stellar` is the default;
+use `--chain solana` or `--chain 0g` only when intentionally targeting those
+adapters.
 
 ### On-chain accounts
 
@@ -85,7 +86,7 @@ npx skills add OpenResearchh/skill --skill autoresearch-validate
 
 | Skill | For | What it does |
 |---|---|---|
-| [`autoresearch-create`](autoresearch-create/) | Researchers | Ingests a GitHub repo, derives a `protocol.json` + benchmark, runs a baseline in a sandbox, uploads artifacts to Irys, and publishes the project on Solana |
+| [`autoresearch-create`](autoresearch-create/) | Researchers | Ingests a GitHub repo, derives a `protocol.json` + benchmark, runs a baseline in a sandbox, and publishes the project through the configured settlement layer |
 | [`autoresearch-mine`](autoresearch-mine/) | Contributors | Runs the Karpathy-style local loop, maintains `trials.jsonl`, optionally exchanges AXL sidechat, and submits proposals on-chain when a trial beats the current best |
 | [`autoresearch-validate`](autoresearch-validate/) | Verifiers | Resolves miner artifacts via an artifact index, reruns the bundled harness, applies deterministic static gates, and calls `approve` / `reject` on `ProposalLedger` |
 
@@ -98,7 +99,7 @@ npx skills add OpenResearchh/skill --skill autoresearch-create
 > create an OpenResearch project from https://github.com/your-org/your-repo
 ```
 
-The agent clones the repo, builds a discovery bundle, runs the protocol questionnaire, writes `protocol.json`, runs a baseline in a podman/docker/bwrap sandbox, uploads artifacts to Irys, and asks whether to publish on Solana devnet.
+The agent clones the repo, builds a discovery bundle, runs the protocol questionnaire, writes `protocol.json`, runs a baseline in a podman/docker/bwrap sandbox, and asks whether to publish through the configured settlement layer.
 
 
 ### Mine
@@ -120,11 +121,10 @@ Allowlist your verifier via `VerifierRegistry`, point the skill at an `ARAH_ARTI
 ## Repository Layout
 
 ```text
-autoresearch-create/     Phase 1 — protocol authoring, baseline, Irys upload, Solana publish
+autoresearch-create/     Phase 1 — protocol authoring, baseline, settlement publish
 autoresearch-mine/       Phase 2 — mining loop, optional AXL sidechat, on-chain submit
 autoresearch-validate/   Phase 2 — verifier harness, ProposalLedger approve/reject
-idl/                     Anchor IDL for the open_research Solana program
-open_research/           Frontend integration guide + integration test report
+smart-contract adapters live under each skill; Stellar ABI v3 lives in ../smart-contracts
 ```
 
 ## Related repositories
@@ -133,7 +133,7 @@ Other pieces of the OpenResearch project live in companion repositories (useful 
 
 | Repository | Role |
 |---|---|
-| **[OpenResearchh/contracts.sol](https://github.com/OpenResearchh/contracts.sol/)** | Solana program — Anchor smart contracts for the protocol |
+| **`../smart-contracts`** | Stellar Soroban OpenResearch contract and TypeScript client |
 | **[OpenResearchh/website](https://github.com/OpenResearchh/website)** | Public website for the project |
 
 ## Competitive Landscape

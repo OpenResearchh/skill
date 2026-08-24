@@ -22,16 +22,14 @@ learns "this address claims this handle"; the direction "this handle claims
 this address" needs a matching public post from the account itself. The
 printed plan says where that goes. Treat an unconfirmed binding as a claim.
 
-**This requires the identity instructions from the contract spec
-(``link_identity`` / ``unlink_identity``), which are not deployed on any
-settlement layer yet.** The command therefore emits the exact payload and
-prints the plan; it does not invent a contract call. ``--submit`` exits 3 to
-say so rather than pretending.
+Stellar ABI v3 deploys ``link_identity`` / ``unlink_identity``. Other layers
+still emit the exact payload and print the plan; ``--submit`` exits 3 there
+rather than pretending a contract call exists.
 
 Exit codes:
   0  payload written and plan printed
   1  bad arguments or IO failure
-  3  --submit requested but no deployed contract has link_identity
+  3  --submit requested but the active layer has no link_identity
 """
 
 from __future__ import annotations
@@ -41,6 +39,7 @@ import hashlib
 import json
 import re
 import secrets
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,9 +56,7 @@ DOMAIN = "openresearch/identity/v1"
 PLATFORMS = {"github": 0}
 
 # Settlement layers whose deployed contract has link_identity / unlink_identity.
-# Empty until one ships; adding a name here without wiring the adapter would be
-# worse than the current honest refusal.
-IDENTITY_CHAINS: frozenset[str] = frozenset()
+IDENTITY_CHAINS: frozenset[str] = frozenset({"stellar"})
 
 # GitHub handle rules: 1-39 chars, alphanumerics and single inner hyphens.
 GITHUB_HANDLE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
@@ -138,8 +135,8 @@ def main() -> int:
         description=(
             "Emit a miner-signed payload binding a code-hosting handle to a chain "
             "address, so accepted work shows up on a real profile. Optional and "
-            "revocable. Requires the identity instructions from the contract spec, "
-            "which are not deployed yet."
+            "revocable. Stellar ABI v3 can submit the binding live; other layers "
+            "emit the payload only."
         ),
     )
     parser.add_argument("--handle", help="Handle to bind (omit with --revoke).")
@@ -153,7 +150,7 @@ def main() -> int:
     parser.add_argument(
         "--submit",
         action="store_true",
-        help="Send the binding on-chain. Exits 3 until a layer deploys link_identity.",
+        help="Send the binding on-chain when the active layer supports link_identity.",
     )
     args = parser.parse_args()
 
@@ -203,6 +200,18 @@ def main() -> int:
 
     if args.submit and not submitted:
         return 3
+    if submitted and args.chain == "stellar":
+        cmd = [
+            "node",
+            str(SCRIPT_DIR / "link_identity_stellar.mjs"),
+            "--payload",
+            str(out_path),
+        ]
+        if args.revoke:
+            cmd.append("--revoke")
+        cmd.append("--yes")
+        result = subprocess.run(cmd, text=True)
+        return result.returncode
     return 0
 
 

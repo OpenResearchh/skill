@@ -12,12 +12,13 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-export const DEFAULT_CHAIN = "solana";
-export const SUPPORTED_CHAINS = ["solana", "0g"];
+export const DEFAULT_CHAIN = "stellar";
+export const SUPPORTED_CHAINS = ["stellar", "solana", "0g"];
 
 // operation -> chain -> { script, runner }. Adapters live beside this file.
 const REGISTRY = {
   publishProject: {
+    stellar: { script: "publish_project_stellar.mjs", runner: "node" },
     solana: { script: "publish_project_solana.mjs", runner: "node" },
     "0g": { script: "publish_project_0g.mjs", runner: "node" },
   },

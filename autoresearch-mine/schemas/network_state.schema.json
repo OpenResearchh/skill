@@ -2,8 +2,70 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/OpenResearchh/experiment-protocol/network_state.schema.json",
   "title": "MiningNetworkState",
-  "description": ".autoresearch/mine/network_state.json — manual frontier (v1), Solana project frontier, or legacy registry sync (0G)",
+  "description": ".autoresearch/mine/network_state.json — manual frontier (v1), Stellar/Solana project frontier, or legacy registry sync (0G)",
   "oneOf": [
+    {
+      "title": "Stellar project frontier",
+      "description": "Synced from the Stellar OpenResearch contract. network_best_metric is the best score the contract has accepted; a candidate must beat it by min_score_improvement_bips to be approved.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "source",
+        "protocolBundleId",
+        "project_id",
+        "contract_id",
+        "rpc_url",
+        "network_passphrase",
+        "protocol_epoch",
+        "protocol_hash",
+        "network_best_metric",
+        "aggregate_score_int256",
+        "metric_scale",
+        "metric_name",
+        "direction",
+        "min_score_improvement_bips",
+        "updated_at"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "1" },
+        "source": { "const": "stellar" },
+        "protocolBundleId": { "type": ["string", "null"] },
+        "project_id": { "type": "integer", "minimum": 0 },
+        "contract_id": {
+          "type": "string",
+          "pattern": "^C[A-Z2-7]{55}$"
+        },
+        "rpc_url": { "type": "string" },
+        "network_passphrase": { "type": "string" },
+        "protocol_epoch": { "type": "integer", "minimum": 0 },
+        "protocol_hash": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+        "code_origin": {
+          "type": "string",
+          "enum": ["currentBestCode", "baseline"]
+        },
+        "current_best": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["repo", "commit", "tree_hash"],
+          "properties": {
+            "repo": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+            "commit": { "type": "string", "pattern": "^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$" },
+            "tree_hash": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
+          }
+        },
+        "network_best_metric": { "type": ["number", "null"] },
+        "aggregate_score_int256": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$"
+        },
+        "metric_scale": { "type": "integer", "minimum": 1 },
+        "metric_name": { "type": "string" },
+        "direction": { "type": "string", "enum": ["minimize", "maximize"] },
+        "min_score_improvement_bips": { "type": "integer", "minimum": 0 },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
     {
       "title": "Solana project frontier",
       "description": "Synced from the on-chain Project account. network_best_metric is the best score the network has accepted; a candidate must beat it by min_score_improvement_bips to be approved.",

@@ -32,7 +32,7 @@ Any other option is passed through to the active adapter unchanged.
 }
 
 const ALIASES = {
-  "--identity": { solana: "--keypair", "0g": "--wallet-id" },
+  "--identity": { stellar: "--verifier", solana: "--keypair", "0g": "--wallet-id" },
 };
 
 function translate(argv, chain) {

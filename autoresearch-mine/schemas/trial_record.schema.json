@@ -52,7 +52,7 @@
     "tree_hash": {
       "type": ["string", "null"],
       "pattern": "^[0-9a-f]{64}$",
-      "description": "Canonical SHA-256 tree commitment at head_commit, from scripts/tree_hash.py. Independent of git's SHA-1 commit ids, so a SHA-1 collision alone cannot swap the code a proposal points at."
+      "description": "Canonical SHA-256 tree commitment at head_commit, computed by the active settlement adapter. Stellar ABI v3 uses @openresearch/stellar-client; legacy adapters use scripts/tree_hash.py. Independent of git's SHA-1 commit ids, so a SHA-1 collision alone cannot swap the code a proposal points at."
     }
   }
 }
