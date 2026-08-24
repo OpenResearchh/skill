@@ -35,7 +35,7 @@ Optional git-artifact fields, filled in on a committed improvement:
 |-------|--------|
 | `base_commit` | 40-hex commit this trial's work branched from |
 | `head_commit` | 40-hex commit the trial produced (same as `git_head_after`) |
-| `tree_hash` | 64-hex canonical tree commitment from `tree_hash.py` at `head_commit` |
+| `tree_hash` | 64-hex canonical tree commitment from the active settlement adapter at `head_commit` |
 
 These are what a proposal references, so recording them per trial is what lets
 a submission be reconstructed from the log. Copy the values printed by

@@ -7,12 +7,11 @@ Two artifact models, and it matters which contract each one targets:
 ``base_commit`` -> ``head_commit`` plus a ``tree_hash``, and nothing is packed
 or uploaded: the miner pushes a candidate branch with
 ``push_candidate_branch.sh`` and the verifier fetches the commit. This is the
-model in the contract spec, and **no settlement layer has shipped it yet** --
+model in the contract spec. ``stellar`` supports it on the ABI v3 contract;
 ``GIT_ARTIFACT_CHAINS`` below is the list of layers whose deployed contract
-accepts these fields, and it is empty. Git mode therefore computes and records
-the proposal, then exits 3 to say the active layer cannot take it. That is
-deliberate: this script is ahead of the contract, and silently degrading to the
-old model would hide which artifact a proposal actually committed to.
+accepts these fields. Git mode computes and records the proposal, then dispatches
+only for those layers. That is deliberate: silently degrading to the old model
+would hide which artifact a proposal actually committed to.
 
 **Legacy mode (``--legacy-artifact``).** What the deployed contracts have
 today: ``git archive`` the tree into a tar, hash it, upload it to permanent
@@ -49,9 +48,8 @@ import repo_identity  # noqa: E402
 from env_utils import env_or_default_stake, load_dotenv_from_cwd  # noqa: E402
 
 # Settlement layers whose deployed contract stores a GitRef (repo / commit /
-# tree_hash) instead of a storage id. Empty until one ships; add the layer name
-# here and wire its adapter flags in `git_submit_command` at the same time.
-GIT_ARTIFACT_CHAINS: frozenset[str] = frozenset()
+# tree_hash) instead of a storage id.
+GIT_ARTIFACT_CHAINS: frozenset[str] = frozenset({"stellar"})
 
 # Mirrors the transport allowlist in scripts/git_artifacts.mjs: only remotes
 # that authenticate the server, and nothing that can execute a command.
@@ -200,12 +198,72 @@ def resolve_base_commit(repo_root: Path, explicit: str | None, remote: str) -> s
 def git_submit_command(args: argparse.Namespace, git_ref: dict[str, str], trial_log: Path) -> list[str]:
     """Adapter invocation for a layer whose contract stores a GitRef.
 
-    Unreachable while GIT_ARTIFACT_CHAINS is empty. It exists so the shape of
-    the call is written down next to the payload it has to carry.
+    The shape stays next to the payload it has to carry, so adding a git-aware
+    chain cannot accidentally omit one of the commitments.
     """
+    if args.chain == "stellar":
+        if args.project_id is None:
+            raise ValueError("--chain stellar requires --project-id")
+        miner = args.stellar_miner or os.environ.get("ARAH_STELLAR_MINER")
+        if not miner:
+            raise ValueError("--chain stellar requires --stellar-miner or ARAH_STELLAR_MINER")
+        state = read_network_state(args.repo_root)
+        direction = state.get("direction")
+        if direction not in {"minimize", "maximize"}:
+            raise ValueError(
+                "Stellar git submit needs network_state.direction; bootstrap the project "
+                "or pass a valid .autoresearch/mine/network_state.json"
+            )
+        output = Path(args.output or trial_log.parent / "submission_stellar.json")
+        cmd = [
+            "node",
+            str(SCRIPT_DIR / "submit_proposal_stellar.mjs"),
+            "--project-id",
+            str(args.project_id),
+            "--repo-hash",
+            git_ref["repo_hash"],
+            "--head-commit",
+            git_ref["head_commit"],
+            "--tree-hash",
+            git_ref["tree_hash"],
+            "--base-commit",
+            git_ref["base_commit"],
+            "--clone-url",
+            git_ref["remote_url"],
+            "--claimed-metric",
+            args.claimed_metric,
+            "--metric-scale",
+            str(args.metric_scale),
+            "--direction",
+            direction,
+            "--stake",
+            args.stake,
+            "--miner",
+            miner,
+            "--reward-recipient",
+            args.reward_recipient,
+            "--output",
+            str(output),
+        ]
+        if state.get("protocol_epoch") is not None:
+            cmd.extend(["--protocol-epoch", str(state["protocol_epoch"])])
+        if args.dry_run:
+            cmd.append("--dry-run")
+        if args.yes:
+            cmd.append("--yes")
+        return cmd
     raise NotImplementedError(
         f"no git-artifact adapter is wired for chain '{args.chain}'"
     )
+
+
+def read_network_state(repo_root: Path) -> dict:
+    path = repo_root / ".autoresearch" / "mine" / "network_state.json"
+    try:
+        with path.open(encoding="utf-8") as f:
+            return json.load(f)
+    except OSError:
+        return {}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -213,17 +271,16 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Submit a committed winning trial as a proposal. Default: git mode "
             "(base_commit/head_commit/tree_hash), which targets the git-artifact "
-            "contract that is not deployed yet. Pass --legacy-artifact to submit "
-            "a tar + storage id to the contract that is deployed today."
+            "contract. Pass --legacy-artifact only for layers whose deployed "
+            "contract still expects a tar + storage id."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Artifact modes:\n"
             "  (default)          git mode. Requires the head commit to already be\n"
             "                     pushed to the project repo -- run\n"
-            "                     push_candidate_branch.sh first. Exits 3 because no\n"
-            "                     deployed contract accepts a GitRef yet; the computed\n"
-            "                     proposal is still written to disk.\n"
+            "                     push_candidate_branch.sh first. Dispatches only when\n"
+            "                     the active layer accepts GitRef proposals.\n"
             "  --legacy-artifact  tar + permanent-storage id. Targets the currently\n"
             "                     deployed contracts. Use this for live submissions.\n"
         ),
@@ -286,7 +343,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Submit zero storage ids for legacy dry-runs only.",
     )
-    parser.add_argument("--yes", action="store_true", help="Confirm live Solana transaction submission.")
+    parser.add_argument("--stellar-miner", help="Stellar miner G... address for git-mode proposal submission.")
+    parser.add_argument("--output", help="Adapter output JSON path (git mode).")
+    parser.add_argument("--yes", action="store_true", help="Confirm live settlement-layer transaction submission.")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -376,12 +435,33 @@ def legacy_command(args: argparse.Namespace, code_tar: Path, trial_log: Path) ->
 
 def collect_git_ref(args: argparse.Namespace, repo_root: Path, head: str) -> dict[str, str]:
     remote_url = resolve_remote_url(repo_root, args.remote)
+    base_commit = resolve_base_commit(repo_root, args.base_commit, args.remote)
+    if args.chain == "stellar":
+        result = subprocess.run(
+            [
+                "node",
+                str(SCRIPT_DIR / "stellar_git_ref.mjs"),
+                "--repo-root",
+                str(repo_root),
+                "--remote-url",
+                remote_url,
+                "--head-commit",
+                head,
+                "--base-commit",
+                base_commit,
+            ],
+            text=True,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or "stellar git ref failed").strip())
+        return json.loads(result.stdout)
     canonical, repo_hash = repo_commitment(remote_url)
     return {
         "repo": canonical,
         "repo_hash": repo_hash,
         "remote_url": remote_url,
-        "base_commit": resolve_base_commit(repo_root, args.base_commit, args.remote),
+        "base_commit": base_commit,
         "head_commit": head,
         "tree_hash": tree_hash(repo_root, head),
         # 0 = SHA-1 commit ids. Reserved so git's own SHA-256 migration does not
@@ -405,6 +485,8 @@ def main() -> int:
         parser.error("--wallet-id is required for --chain 0g")
     if args.chain == "solana" and args.token_address:
         parser.error("--chain solana requires --project-id; --token-address is 0G-only")
+    if args.chain == "stellar" and args.token_address:
+        parser.error("--chain stellar requires --project-id; --token-address is 0G-only")
 
     repo_root = args.repo_root.expanduser().resolve()
     trial_log = repo_root / ".autoresearch" / "mine" / "runs" / args.trial_id / "stdout.log"

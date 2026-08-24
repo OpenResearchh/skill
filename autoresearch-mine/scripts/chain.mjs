@@ -12,16 +12,18 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-export const DEFAULT_CHAIN = "solana";
-export const SUPPORTED_CHAINS = ["solana", "0g"];
+export const DEFAULT_CHAIN = "stellar";
+export const SUPPORTED_CHAINS = ["stellar", "solana", "0g"];
 
 // operation -> chain -> { script, runner }. Adapters live beside this file.
 const REGISTRY = {
   bootstrap: {
+    stellar: { script: "bootstrap_from_stellar.mjs", runner: "node" },
     solana: { script: "bootstrap_from_solana.mjs", runner: "node" },
     "0g": { script: "bootstrap_from_registry.py", runner: "python3" },
   },
   submitProposal: {
+    stellar: { script: "submit_proposal_stellar.mjs", runner: "node" },
     solana: { script: "submit_proposal_solana.mjs", runner: "node" },
     "0g": { script: "submit_proposal.py", runner: "python3" },
   },
