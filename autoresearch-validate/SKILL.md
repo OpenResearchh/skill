@@ -39,12 +39,12 @@ Two independent checks fix the bytes a verifier scores:
    having git accept it *is* the integrity check, so a host cannot serve
    different code than the proposal committed to.
 2. **The canonical tree hash.** Git commit ids are SHA-1 and this system has
-   value attached to them, so [`scripts/tree_hash.py`](scripts/tree_hash.py)
-   computes a second, independent SHA-256 commitment over git's own object
-   model — `sha256("openresearch/tree/v1\n" || per-path len:path, mode,
-   sha256(blob))`. A SHA-1 collision alone is then not enough to swap the code.
-   It is deliberately **not** a hash of `git archive` output, which varies with
-   git version and gitattributes and would fail every honest proposal.
+   value attached to them, so every adapter records a second independent
+   SHA-256 commitment over git's object model. For Stellar ABI v3, use the
+   serialization in `@openresearch/stellar-client`; legacy adapters use
+   [`scripts/tree_hash.py`](scripts/tree_hash.py). Neither path hashes
+   `git archive` output, which varies with git version and gitattributes and
+   would fail every honest proposal.
    Submodules and non-blob entries are rejected rather than hashed.
 
 The chain stores `sha256("host/owner/repo")` — a commitment, not a location — so
@@ -138,13 +138,14 @@ token. Those two must never meet.**
 
 1. `--chain <name>` on the command line
 2. `ARAH_CHAIN` in the environment
-3. `.autoresearch/chain.json` in the working directory, e.g. `{"chain":"solana"}`
+3. `.autoresearch/chain.json` in the working directory, e.g. `{"chain":"stellar"}`
 4. the built-in default
 
-Supported names are `solana` and `0g`; `solana` is the default. Pass **`--show-chain`** (or set **`ARAH_SHOW_CHAIN=1`**) to print which layer and adapter were selected — do that first whenever the loop fails in a way that looks layer-specific. Unknown flags are forwarded to the adapter unchanged, so layer-specific options (alternate project identifiers, endpoint overrides, workspace paths) stay reachable without appearing here.
+Supported names are `stellar`, `solana`, and `0g`; `stellar` is the default. Pass **`--show-chain`** (or set **`ARAH_SHOW_CHAIN=1`**) to print which layer and adapter were selected — do that first whenever the loop fails in a way that looks layer-specific. Unknown flags are forwarded to the adapter unchanged, so layer-specific options (alternate project identifiers, endpoint overrides, workspace paths) stay reachable without appearing here.
 
 Layer detail lives in the reference docs, not here:
 
+- `stellar` → [`references/onchain-verify-stellar.md`](references/onchain-verify-stellar.md)
 - `solana` → [`references/onchain-verify-solana.md`](references/onchain-verify-solana.md)
 - `0g` → [`references/onchain-verify-0g.md`](references/onchain-verify-0g.md)
 
@@ -202,6 +203,8 @@ These configure one settlement layer's adapter and are not part of the primary f
 
 | Variable | Layer | Purpose |
 |----------|-------|---------|
+| `OPEN_RESEARCH_CONTRACT_ID` / `STELLAR_RPC_URL` / `STELLAR_NETWORK_PASSPHRASE` | `stellar` | Stellar contract and RPC overrides; defaults come from sibling `smart-contracts` deployment metadata. |
+| `ARAH_STELLAR_VERIFIER` | `stellar` | Verifier G... address for preflight checks. |
 | `AUTORESEARCH_CREATE_SCRIPTS` | `solana` | Directory containing the client helper modules (`solana_open_research.mjs`, `irys_storage.mjs`); defaults to sibling `autoresearch-create/scripts`. |
 | `ARAH_DEPLOYMENT_JSON` | `0g` | Path to `deployment.json` (default: bundled `contracts/0g-galileo-testnet/deployment.json`) |
 | `ARAH_RPC_URL` | `0g` | RPC endpoint |
@@ -228,7 +231,7 @@ Initialize with **`scripts/init_verify_workspace.sh <repo_root>`**.
 | `vendor/harness/` | Vendored `run_baseline.sh`, `run_measured_trials.sh`, `aggregate_samples.py`, `derive_trial_seed.py` trial harness (sync with create/mine) |
 | `scripts/chain.mjs` | Settlement-layer resolution and the operation → adapter registry. The only file that maps `validateLoop` onto a concrete implementation. |
 | `scripts/validate_loop.mjs` | **Review pending proposals and settle them.** Neutral entrypoint: `--project-id`, `--identity`, `--once`, `--dry-run`, `--yes`, `--chain`, `--show-chain`; other flags pass through to the adapter. |
-| `scripts/tree_hash.py` | Canonical SHA-256 commitment over a git tree. `--repo-root --commit [--verify HEX]`; the SHA-1 hardening that lets a commit id carry value |
+| `scripts/tree_hash.py` | Legacy adapter SHA-256 commitment over a git tree. Stellar ABI v3 uses `@openresearch/stellar-client` via `stellar_open_research.mjs`; do not mix the two encodings. |
 | `scripts/git_artifacts.mjs` | Fetch a commit by id from an allowed remote, check it out detached and clean, and verify its tree hash. The one place that knows how to do this, so miner and verifier cannot drift |
 | `scripts/merge_approved_proposal.mjs` | Merge an approved proposal into the project repo and print `mergedCommit` for `record_merge`. Re-checks the head sha, never squashes, reports approved-but-unmerged instead of failing |
 | `scripts/restore_trusted_harness.py` | Overwrite every protocol-immutable path in the submitted tree with the project's own harness (a checkout at the project's pinned commit), and report any path that diverged (divergence on an immutable path is tampering) |
@@ -239,6 +242,7 @@ Initialize with **`scripts/init_verify_workspace.sh <repo_root>`**.
 | `scripts/append_review_record.py` | Append one review row to `.autoresearch/verify/reviews.jsonl` |
 | `scripts/metrics_hash.py` | SHA-256 → 32-byte hex |
 | `scripts/parse_baseline_metric.py` | Parse `BASELINE_METRIC=` from a harness log |
+| `references/onchain-verify-stellar.md` | Verifier preflight and ABI v3 settlement notes for the `stellar` layer |
 | `references/onchain-verify-solana.md` | Verifier setup, artifact resolution, and settlement detail for the `solana` layer |
 | `references/onchain-verify-0g.md` | Verifier setup, hash + economics notes, and the legacy pipeline ordering for the `0g` layer |
 | `references/onchain-mining-0g.md` | Miner submit-path context needed when interpreting `0g` proposals |
@@ -251,6 +255,7 @@ Do not call these from the workflow; `validate_loop.mjs` selects the right one. 
 
 | Resource | Layer | Role |
 |----------|-------|------|
+| `scripts/run_validate_loop_stellar.mjs` | `stellar` | Verifier loop: read project/open proposals, claim, fetch candidate and trusted GitRefs, rerun the benchmark, approve/reject/release, optionally merge accepted commits, then `record_merge`. |
 | `scripts/run_validate_loop_solana.mjs` | `solana` | Validator daemon: resolve project, check CLI + verifier account, poll proposals, claim first, fetch trusted project artifacts, verify, upload metrics/evidence, settle, then merge approved work. `--repo-url`, `--artifact-mode`, `--github-token-file`, `--no-merge`. |
 | `scripts/resolve_proposal_artifacts_solana.mjs` | `solana` | Fetch the proposal's candidate commit from the project remote and verify its canonical tree hash. `--artifact-mode irys` falls back to downloading and hash-verifying the tarball. |
 | `scripts/fetch_project_artifacts_solana.mjs` | `solana` | Materialize the **project's own** protocol + benchmark harness from its pinned commit (protocol pinned to the on-chain SHA-256), so scoring never uses inputs taken from the submission. Falls back to the hash-verified, tar-guarded archive path. |
@@ -350,6 +355,7 @@ mining profitable.
 
 | Script | Layer | Codes |
 |--------|-------|-------|
+| `run_validate_loop_stellar.mjs` | `stellar` | 0 preflight complete; 1 args / endpoint / verifier query |
 | `run_validate_loop_solana.mjs` | `solana` | 0 loop finished; 1 args / endpoint / identity / not registered as verifier |
 | `check_verifier_eligibility.py` | `0g` | 0 verifier; 2 not verifier |
 | `watch_proposals.py` | `0g` | 0 |
