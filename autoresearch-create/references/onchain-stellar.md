@@ -19,6 +19,11 @@ Required publish inputs:
 - `--token <C...>` or `ARAH_STELLAR_STAKE_TOKEN`
 - `--minimum-stake`, `--reward-per-approval`, `--reward-pool-funding`
 
+Amounts are integer smallest units of the SEP-41 token contract. Check token
+decimals off-chain before choosing values. The contract rejects
+`minimum_stake <= 0`, negative rewards/funding, and `min_improvement_bips >
+10000`.
+
 Network defaults come from `smart-contracts/deployments/mainnet.json`. Override
 with `OPEN_RESEARCH_CONTRACT_ID`, `STELLAR_RPC_URL`,
 `STELLAR_NETWORK_PASSPHRASE`, or `--deployment-json`.

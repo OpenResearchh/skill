@@ -134,6 +134,9 @@ function buildPlan(options) {
     options.minImprovementBips ?? protocol?.measurement?.minScoreImprovementBips ?? 100,
     "min improvement bips",
   );
+  if (minImprovementBips > 10_000) {
+    throw new Error("min improvement bips must be <= 10000");
+  }
   const token = requireContractId(options.token || process.env.ARAH_STELLAR_STAKE_TOKEN, "token");
   const creator = requireAddress(options.creator || process.env.ARAH_STELLAR_CREATOR, "creator");
   const minimumStake = parseI128(options.minimumStake ?? process.env.ARAH_STAKE ?? "1", "minimum stake");

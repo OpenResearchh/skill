@@ -367,6 +367,9 @@ export function assertRepoMatches(remoteUrl, expectedHash) {
 }
 
 function normalizeUrlRepository(repository) {
+  if (repository.includes("?") || repository.includes("#")) {
+    throw new Error("repository URL must not contain a query or fragment");
+  }
   const url = new URL(repository);
   if (url.protocol !== "https:" && url.protocol !== "ssh:") {
     throw new Error("repository URL must use HTTPS or SSH");
@@ -374,17 +377,36 @@ function normalizeUrlRepository(repository) {
   if (url.protocol === "https:" && (url.username || url.password)) {
     throw new Error("HTTPS repository URL must not contain credentials");
   }
+  if (url.protocol === "https:" && url.port && url.port !== "443") {
+    throw new Error("repository URL must not use a non-default HTTPS port");
+  }
+  if (url.protocol === "ssh:") {
+    if ((url.username && url.username !== "git") || url.password) {
+      throw new Error("SSH repository credentials must be optional git@");
+    }
+    if (url.port && url.port !== "22") {
+      throw new Error("repository URL must not use a non-default SSH port");
+    }
+  }
   return canonicalIdentity(url.hostname, decodeURIComponent(url.pathname));
 }
 
 function canonicalIdentity(hostInput, pathInput) {
   const host = String(hostInput || "").toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/.test(host)) {
+    throw new Error("repository host must be a valid DNS host");
+  }
   const parts = String(pathInput || "").replace(/^\/+|\/+$/g, "").split("/");
   if (!host || parts.length !== 2 || !parts[0] || !parts[1]) {
     throw new Error("repository identity must have host/owner/repo");
   }
   const repo = parts[1].endsWith(".git") ? parts[1].slice(0, -4) : parts[1];
-  if (!repo) throw new Error("repository name is empty");
+  if (!repo || parts[0] === "." || parts[0] === ".." || repo === "." || repo === "..") {
+    throw new Error("repository owner and name must be valid");
+  }
+  if (parts[0].includes("?") || parts[0].includes("#") || repo.includes("?") || repo.includes("#")) {
+    throw new Error("repository owner and name must not contain query or fragment characters");
+  }
   return `${host}/${parts[0]}/${repo}`;
 }
 
