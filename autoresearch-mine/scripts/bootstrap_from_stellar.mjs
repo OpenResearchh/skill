@@ -10,6 +10,7 @@ import {
   createClient,
   directionText,
   formatCommitId,
+  hashFileHex,
   metricFromScore,
   parseArgs,
   projectGitRef,
@@ -80,6 +81,13 @@ function writeNetworkState({ repoRoot, protocolPath, project, projectId, network
     return null;
   }
   const protocol = readJson(protocolPath);
+  const actualProtocolHash = hashFileHex(protocolPath);
+  const expectedProtocolHash = bufferHex(project.protocol_hash);
+  if (actualProtocolHash !== expectedProtocolHash) {
+    throw new Error(
+      `protocol hash mismatch: expected ${expectedProtocolHash}, got ${actualProtocolHash}`,
+    );
+  }
   const primary = protocol?.measurement?.primaryMetric || {};
   const direction = directionText(project.direction);
   const metricName = primary.name || "aggregate_score";
@@ -93,6 +101,7 @@ function writeNetworkState({ repoRoot, protocolPath, project, projectId, network
     rpc_url: network.rpcUrl,
     network_passphrase: network.networkPassphrase,
     protocol_epoch: Number(project.protocol_epoch),
+    protocol_hash: expectedProtocolHash,
     code_origin: codeOrigin,
     network_best_metric: metricFromScore(score, direction, metricScale),
     aggregate_score_int256: BigInt(score).toString(),

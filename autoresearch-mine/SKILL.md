@@ -190,7 +190,7 @@ Optional **AXL sidechat** writes miner-to-miner field notes to **`sidechat.jsonl
 | `scripts/push_candidate_branch.sh` | **Publish the winning commit** to the project repo under a collision-free branch. Never force-pushes, never opens a PR, refuses a dirty tree or a branch that already holds different content. |
 | `scripts/tree_hash.py` | Legacy adapter SHA-256 tree commitment. Stellar ABI v3 uses `stellar_open_research.mjs` / `@openresearch/stellar-client` instead. |
 | `scripts/git_artifacts.mjs` | Fetch / check out / verify a commit from git (transport allowlist, tree-hash verification). Used by the git-mode bootstrap. |
-| `scripts/link_identity.py` | Optional, revocable, miner-signed binding of a code-hosting handle to the mining address, so accepted work shows up on a real profile. Emits the payload and the plan; the contract instruction is not deployed yet. |
+| `scripts/link_identity.py` | Optional, revocable, miner-signed binding of a code-hosting handle to the mining address, so accepted work shows up on a real profile. Stellar ABI v3 can submit it live; other layers emit the payload and plan only. |
 | `scripts/read_mining_limits.py` | Print `max_trials`, `max_session_wall_seconds`, `max_stagnant_trials`, `stop_after_pr`, and optionally **`on_chain_project_id`** (if `miningLoop.onChainProjectId` or **`ARAH_PROJECT_ID`** is set). |
 | `scripts/init_mine_workspace.sh` | Create `.autoresearch/mine` tree. |
 | `scripts/bootstrap_repo.sh` | Clone or reuse repo from protocol `meta.repo`. |
@@ -219,7 +219,9 @@ Do not call these from the workflow; the neutral entrypoints select the right on
 | Resource | Layer | Role |
 |----------|-------|------|
 | `scripts/bootstrap_from_stellar.mjs` | `stellar` | Bootstrap adapter: read `get_project`, fetch the selected GitRef, verify `tree_hash`, initialize the workspace, and write `network_state.json` with `source: stellar`. |
+| `scripts/sync_stellar_frontier.mjs` | `stellar` | Refresh `network_state.json`, accepted frontier score, protocol epoch, protocol hash, and `refs/openresearch/base` from `get_project`. |
 | `scripts/submit_proposal_stellar.mjs` | `stellar` | GitRef proposal submit adapter for the ABI v3 `submit` method. |
+| `scripts/link_identity_stellar.mjs` | `stellar` | Submit `link_identity` / `unlink_identity` for optional miner profile attribution. |
 | `scripts/bootstrap_from_solana.mjs` | `solana` | Bootstrap adapter. **Git mode** when the project record names a commit: clone/fetch, check out, verify the tree hash, and take `protocol.json` from the tree. **Storage mode** otherwise: download artifacts by their recorded ids, verify hashes, unpack. Both init the workspace and sync `network_state.json`. |
 | `scripts/download_irys_artifacts.mjs` | `solana` | Lower-level artifact downloader by id/tag with SHA-256 verification. |
 | `scripts/submit_proposal_solana.mjs` | `solana` | Submit adapter: builds/sends the proposal with code/log hashes and stake accounts. |
@@ -319,6 +321,13 @@ export GIT_TERMINAL_PROMPT=0
 published project's current best where the adapter supports it. Re-run bootstrap
 (or the layer's refresh command from its reference doc) before comparing a trial
 against "network best", then re-validate:
+
+```bash
+node ./sync_stellar_frontier.mjs \
+  --repo-root /path/to/repo \
+  --protocol-json /path/to/repo/protocol.json \
+  --project-id <project_id>
+```
 
 ```bash
 ./validate_network_state.sh /path/to/protocol.json /path/to/repo
@@ -450,7 +459,8 @@ work shows up on a real profile:
 ```bash
 python3 ./link_identity.py --handle <github-handle> --address <mining address> \
   --repo-root /path/to/repo
-# --revoke emits the unlink payload
+# Add --chain stellar --submit to send link_identity live on Stellar ABI v3.
+# --revoke emits the unlink payload.
 ```
 
 Optional, revocable, and miner-signed — nothing in settlement reads it, so a
@@ -498,7 +508,7 @@ Use sidechat only for side conversation: experiment hints, failed-hypothesis mem
 | `push_candidate_branch.sh` | 0 pushed / already published / `--dry-run`; 1 usage; 2 not a repo, dirty tree, or unresolvable commit; **3** remote rejected by the transport allowlist; **4** branch exists with different content; **5** push failed. |
 | `submit_trial_proposal.py` | 0 submitted (or git-mode `--dry-run`); 1 args / dirty repo / missing trial log / unresolvable `base_commit` / submit failure; **3** git mode prepared but the active layer has no git-artifact contract; **4** head commit not published on the project repo. |
 | `tree_hash.py` | 0 hash printed (and matched `--verify`); 2 usage or not a git repo; **3** `--verify` mismatch; **4** unhashable entry (submodule or unknown mode). |
-| `link_identity.py` | 0 payload written; 1 bad args / invalid handle / IO; **3** `--submit` requested but no deployed contract has `link_identity`. |
+| `link_identity.py` | 0 payload written or submitted; 1 bad args / invalid handle / IO / adapter failure; **3** `--submit` requested but the active layer has no `link_identity`. |
 | `capture_trace.py` | 0 (also when capture is disabled); 1 bad args / IO / schema failure. |
 | `append_trial_record.py` | 0; 1 validation; 2 IO. |
 | `axl_sidechat_send.py` | 0 sent / disabled / no peers; 1 invalid input or every configured peer failed. |

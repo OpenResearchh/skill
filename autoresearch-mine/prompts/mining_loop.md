@@ -17,7 +17,7 @@ You run the **outer mining loop** without asking the human between trials.
 2. Record `git_head_before` from `git rev-parse HEAD` in `repo_root`.
 3. Run `run_trial.sh <protocol.json> <repo_root> <trial_id>` from `autoresearch-mine/scripts/`.
 4. Parse **`BASELINE_METRIC=<float>`** from the script stdout on success (same token as `run_baseline.sh`).
-5. If the active layer has a frontier sync adapter, refresh **`network_state.json`** immediately before comparing; this avoids submitting against stale chain state. For layers without sync support, use the bootstrap/manual frontier and call that out in the final report.
+5. Refresh **`network_state.json`** immediately before comparing; this avoids submitting against stale chain state. For Stellar, run `sync_stellar_frontier.mjs --repo-root <repo_root> --protocol-json <protocol.json> --project-id <id>`. For legacy 0G, run `sync_registry_frontier.py`. For layers without sync support, use the bootstrap/manual frontier and call that out in the final report.
 6. Compare numerically using **`compare_metric.py`** — never compare floats in prose.
 7. If improved vs last local best: run `commit_improvement.sh <protocol.json> <repo_root> <trial_id> <before> <after>`; else run `revert_mutable_surface.sh <protocol.json> <repo_root>`.
 8. If the metric beats `network_state.network_best_metric`, publish the winning commit before submitting: `push_candidate_branch.sh --repo-root <repo_root> --trial-id <trial_id> --miner-id <mining address>`. The commits are the artifact, so a proposal whose commit is not fetchable cannot be verified. The script never force-pushes and re-running it on the same commit is a no-op, so it is safe to call unconditionally after `commit_improvement.sh`.

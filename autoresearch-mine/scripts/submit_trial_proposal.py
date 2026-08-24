@@ -214,6 +214,7 @@ def git_submit_command(args: argparse.Namespace, git_ref: dict[str, str], trial_
                 "Stellar git submit needs network_state.direction; bootstrap the project "
                 "or pass a valid .autoresearch/mine/network_state.json"
             )
+        metric_scale = state.get("metric_scale") or args.metric_scale
         output = Path(args.output or trial_log.parent / "submission_stellar.json")
         cmd = [
             "node",
@@ -233,7 +234,7 @@ def git_submit_command(args: argparse.Namespace, git_ref: dict[str, str], trial_
             "--claimed-metric",
             args.claimed_metric,
             "--metric-scale",
-            str(args.metric_scale),
+            str(metric_scale),
             "--direction",
             direction,
             "--stake",

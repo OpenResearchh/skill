@@ -18,6 +18,7 @@
         "rpc_url",
         "network_passphrase",
         "protocol_epoch",
+        "protocol_hash",
         "network_best_metric",
         "aggregate_score_int256",
         "metric_scale",
@@ -38,6 +39,7 @@
         "rpc_url": { "type": "string" },
         "network_passphrase": { "type": "string" },
         "protocol_epoch": { "type": "integer", "minimum": 0 },
+        "protocol_hash": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
         "code_origin": {
           "type": "string",
           "enum": ["currentBestCode", "baseline"]

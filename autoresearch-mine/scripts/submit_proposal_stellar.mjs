@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
+  bufferHex,
   createClient,
   formatCommitId,
   gitRef,
@@ -140,6 +141,12 @@ async function main() {
   const project = unwrapResult(projectTx, "get_project");
   const incumbent = projectGitRef(project);
   const incumbentCommit = formatCommitId(incumbent.gitRef.commit);
+  if (bufferHex(incumbent.gitRef.repo) !== options.repoHash.toLowerCase()) {
+    throw new Error("candidate repo hash does not match the project repo hash");
+  }
+  if (input.stake < BigInt(project.minimum_stake)) {
+    throw new Error(`stake ${input.stake} is below project minimum ${project.minimum_stake}`);
+  }
   if (incumbentCommit.toLowerCase() !== String(options.baseCommit).toLowerCase()) {
     throw new Error(
       `base commit ${options.baseCommit} is stale; current contract incumbent is ${incumbentCommit}`,
