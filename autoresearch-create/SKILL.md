@@ -244,7 +244,7 @@ The publish writes `storage_git.json` next to the protocol bundle, which records
 
 ### Identity and funding
 
-Publishing requires an identity on the active settlement layer that can sign the registration and pay for it. The signing path is adapter-specific: some layers use a browser wallet bridge, while Stellar automation uses a locally configured signer for the creator address.
+Publishing requires an identity on the active settlement layer that can sign the registration and pay for it. The signing path is adapter-specific. Stellar live publish opens a localhost browser page for Freighter-compatible wallet signing by default; headless Stellar signing is an explicit automation fallback.
 
 **Do not ask the user for a private key, seed phrase, or API key.** A headless signing path exists for automation; use it only when the user explicitly opts in, and read the reference first because it changes what the publish can do.
 
@@ -265,6 +265,7 @@ Prepare arguments from the approved protocol and the checkout the baseline ran i
 - `--baseline-commit`: the commit to pin. Defaults to `HEAD` of `--repo-root`. Accepts any ref; the adapter resolves it to a full sha.
 - `--repo-url`: the canonical remote. Defaults to the checkout's `origin`, then `meta.repo.cloneUrl`. Only `https`, `ssh`, and `git@` remotes are accepted.
 - `--baseline-aggregate-score`: the agreed signed integer representation of the approved primary metric. Ask the user to confirm scaling for decimal metrics, or pass `--baseline-metric <decimal> --metric-scale <integer>` and let the CLI scale deterministically.
+- `--creator`: optional for Stellar browser signing; when omitted, the connected wallet becomes the creator. When present, the adapter rejects a different connected wallet.
 - Reward-token and stake parameters are layer-specific. For Stellar, pass an existing SEP-41 token contract plus `--minimum-stake`, `--reward-per-approval`, and `--reward-pool-funding`. For legacy Solana, pass `--token-name`, `--token-symbol`, `--base-price`, `--slope`, and `--miner-pool-cap`. See the active reference doc.
 
 Preferred command shape:
@@ -280,6 +281,10 @@ node scripts/publish_project.mjs \
 ```
 
 Use `--dry-run` first when values are uncertain: the adapter validates inputs and writes a plan file next to the protocol bundle instead of settling anything.
+
+For Stellar automation only, add `--headless` and provide
+`ARAH_STELLAR_CREATOR_SECRET_KEY` or `--secret-key`. Do not use headless signing
+for normal interactive publishes.
 
 After a successful publish, record the project id, the settlement reference (transaction id/hash), the publishing identity, and `storage_git.json` next to the protocol authoring bundle.
 

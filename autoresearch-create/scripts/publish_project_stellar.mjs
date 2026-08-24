@@ -26,9 +26,18 @@ import {
   writeJson,
 } from "./stellar_open_research.mjs";
 import { assertAllowedRemote, git } from "./git_artifacts.mjs";
+import { startLocalStellarWalletPublish } from "./local_stellar_wallet_publish.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const BOOL_FLAGS = new Set(["help", "dryRun", "yes", "allowUnpushedBaseline", "gitPrimary"]);
+const BOOL_FLAGS = new Set([
+  "help",
+  "dryRun",
+  "yes",
+  "allowUnpushedBaseline",
+  "gitPrimary",
+  "headless",
+  "noOpen",
+]);
 
 function usage() {
   console.log(`Usage:
@@ -54,7 +63,9 @@ Options:
   --rpc-url <url>               Override Stellar RPC URL.
   --network-passphrase <text>   Override Stellar network passphrase.
   --deployment-json <path>      Deployment metadata. Defaults to smart-contracts/deployments/mainnet.json.
-  --secret-key <S...>           Creator signer secret. Prefer env ARAH_STELLAR_CREATOR_SECRET_KEY.
+  --headless                    Use --secret-key/env signer instead of the browser wallet flow.
+  --secret-key <S...>           Headless creator signer secret. Env fallback: ARAH_STELLAR_CREATOR_SECRET_KEY.
+  --no-open                     Print the browser wallet URL without opening it automatically.
   --yes                         Send the create_project transaction. Without --yes this is a dry-run plan.
 `);
 }
@@ -138,7 +149,8 @@ function buildPlan(options) {
     throw new Error("min improvement bips must be <= 10000");
   }
   const token = requireContractId(options.token || process.env.ARAH_STELLAR_STAKE_TOKEN, "token");
-  const creator = requireAddress(options.creator || process.env.ARAH_STELLAR_CREATOR, "creator");
+  const rawCreator = options.creator || process.env.ARAH_STELLAR_CREATOR;
+  const creator = rawCreator ? requireAddress(rawCreator, "creator") : null;
   const minimumStake = parseI128(options.minimumStake ?? process.env.ARAH_STAKE ?? "1", "minimum stake");
   const rewardPerApproval = parseI128(
     options.rewardPerApproval ?? process.env.ARAH_REWARD_PER_APPROVAL ?? "1",
@@ -191,7 +203,27 @@ function buildPlan(options) {
   };
 }
 
-function writeManifests({ plan, network, outputDir, dryRun, publishResult = null }) {
+function publishSummary(plan, network) {
+  return {
+    chain: "stellar",
+    network: network.network,
+    rpcUrl: network.rpcUrl,
+    networkPassphrase: network.networkPassphrase,
+    contractId: network.contractId,
+    creator: plan.creator || "(browser wallet after connection)",
+    protocolJson: plan.protocolJson,
+    repo: plan.repo.canonical,
+    baselineCommit: plan.baselineCommit,
+    treeHash: plan.treeHashHex,
+    baselineScore: plan.baselineScore.toString(),
+    token: plan.token,
+    minimumStake: plan.minimumStake.toString(),
+    rewardPerApproval: plan.rewardPerApproval.toString(),
+    rewardPoolFunding: plan.rewardPoolFunding.toString(),
+  };
+}
+
+function writeManifests({ plan, network, outputDir, dryRun, publishResult = null, signedBy = null }) {
   const gitManifest = {
     schemaVersion: "2",
     artifactModel: "git",
@@ -225,6 +257,7 @@ function writeManifests({ plan, network, outputDir, dryRun, publishResult = null
     contractId: network.contractId,
     deploymentJson: network.deploymentPath,
     creator: plan.creator,
+    signedBy,
     args: {
       protocol_hash: `0x${hashFileHex(plan.protocolJson)}`,
       baseline: {
@@ -266,30 +299,79 @@ async function main() {
     return 0;
   }
 
-  const secretKey = secretFromEnv(options, "creator");
-  if (!secretKey) throw new Error("live publish requires --secret-key or ARAH_STELLAR_CREATOR_SECRET_KEY");
-  const client = await createClient(
-    {
-      contractId: network.contractId,
-      rpcUrl: network.rpcUrl,
-      networkPassphrase: network.networkPassphrase,
-    },
-    { publicKey: plan.creator, secretKey },
-  );
-  const tx = await client.create_project({ creator: plan.creator, input: plan.input });
-  const projectId = unwrapResult(tx, "create_project");
-  const sendResult = await tx.signAndSend();
-  const paths = writeManifests({
-    plan,
-    network,
-    outputDir,
-    dryRun: false,
-    publishResult: {
-      projectId: projectId.toString(),
-      sendResult,
-    },
-  });
-  console.log(paths.publishPath);
+  const useHeadless = Boolean(options.headless || options.secretKey);
+  let walletSession = null;
+  let signedBy = "secretKey";
+  try {
+    if (!useHeadless) {
+      walletSession = await startLocalStellarWalletPublish({
+        network: network.network,
+        rpcUrl: network.rpcUrl,
+        networkPassphrase: network.networkPassphrase,
+        contractId: network.contractId,
+        summary: publishSummary(plan, network),
+        open: !options.noOpen,
+      });
+      console.log("\nOpen this local wallet signing page in a browser with Freighter or a compatible Stellar wallet:\n");
+      console.log(walletSession.url);
+      console.log("\nConnect your wallet there to approve the OpenResearch create_project transaction.\n");
+      const connected = await walletSession.waitForAccount();
+      if (plan.creator && plan.creator !== connected) {
+        throw new Error(`--creator ${plan.creator} does not match the connected wallet ${connected}`);
+      }
+      plan.creator = connected;
+      walletSession.setSummary(publishSummary(plan, network));
+      signedBy = "browserWallet";
+    }
+
+    let client;
+    if (useHeadless) {
+      const secretKey = secretFromEnv(options, "creator");
+      if (!secretKey) {
+        throw new Error("headless live publish requires --secret-key or ARAH_STELLAR_CREATOR_SECRET_KEY");
+      }
+      if (!plan.creator) throw new Error("headless live publish requires --creator or ARAH_STELLAR_CREATOR");
+      client = await createClient(
+        {
+          contractId: network.contractId,
+          rpcUrl: network.rpcUrl,
+          networkPassphrase: network.networkPassphrase,
+        },
+        { publicKey: plan.creator, secretKey },
+      );
+    } else {
+      client = await createClient(
+        {
+          contractId: network.contractId,
+          rpcUrl: network.rpcUrl,
+          networkPassphrase: network.networkPassphrase,
+        },
+        {
+          publicKey: plan.creator,
+          signTransaction: (xdr, signOptions) =>
+            walletSession.signTransaction(xdr, { ...signOptions, address: plan.creator }),
+        },
+      );
+    }
+    const tx = await client.create_project({ creator: plan.creator, input: plan.input });
+    const projectId = unwrapResult(tx, "create_project");
+    const sendResult = await tx.signAndSend();
+    const paths = writeManifests({
+      plan,
+      network,
+      outputDir,
+      dryRun: false,
+      signedBy,
+      publishResult: {
+        projectId: projectId.toString(),
+        sendResult,
+      },
+    });
+    walletSession?.setComplete({ publishPath: paths.publishPath });
+    console.log(paths.publishPath);
+  } finally {
+    await walletSession?.close({ delayMs: 1000 });
+  }
   return 0;
 }
 
