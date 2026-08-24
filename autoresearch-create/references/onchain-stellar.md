@@ -15,7 +15,9 @@ Required publish inputs:
 - `--protocol-json <path>`
 - `--repo-root <checkout>`
 - `--baseline-aggregate-score <int>` or `--baseline-metric <decimal>`
-- `--creator <G...>` or `ARAH_STELLAR_CREATOR`
+- `--creator <G...>` or `ARAH_STELLAR_CREATOR` when you want to require a
+  specific publisher address. If omitted in live browser mode, the connected
+  wallet becomes the creator.
 - `--token <C...>` or `ARAH_STELLAR_STAKE_TOKEN`
 - `--minimum-stake`, `--reward-per-approval`, `--reward-pool-funding`
 
@@ -34,6 +36,12 @@ Run without `--yes` first. The adapter writes:
 - `publish_stellar.json`: Stellar network, contract id, and `create_project`
   payload
 
-Live publish requires `--yes` and a local creator signer via
-`ARAH_STELLAR_CREATOR_SECRET_KEY` or `--secret-key`. Never place a seed phrase in
-the protocol bundle or mining workspace.
+Live publish requires `--yes`. By default, the adapter starts a localhost page,
+opens the browser, and asks Freighter or a compatible Stellar wallet to sign the
+`create_project` transaction. The CLI verifies that a supplied `--creator`
+matches the connected wallet.
+
+Headless automation is still available with `--headless` plus
+`ARAH_STELLAR_CREATOR_SECRET_KEY` or `--secret-key`. Use it only for CI or
+operator-managed automation; never place a seed phrase in the protocol bundle or
+mining workspace.

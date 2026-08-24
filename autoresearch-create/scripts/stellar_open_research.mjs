@@ -102,8 +102,19 @@ export async function loadStellarClient() {
   }
 }
 
-export async function createClient(networkConfig, { publicKey, secretKey } = {}) {
+export async function createClient(
+  networkConfig,
+  { publicKey, secretKey, signTransaction, signAuthEntry } = {},
+) {
   const { generated } = await loadStellarClient();
+  if (signTransaction) {
+    return new generated.Client({
+      ...networkConfig,
+      publicKey,
+      signTransaction,
+      ...(signAuthEntry ? { signAuthEntry } : {}),
+    });
+  }
   if (!secretKey) return new generated.Client(networkConfig);
 
   const keypair = generated.Keypair.fromSecret(secretKey);

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -25,6 +26,7 @@ import {
   hashCanonicalTree,
   repoCommitment,
 } from "../autoresearch-create/scripts/stellar_open_research.mjs";
+import { startLocalStellarWalletPublish } from "../autoresearch-create/scripts/local_stellar_wallet_publish.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLISH = path.join(ROOT, "autoresearch-create", "scripts", "publish_project.mjs");
@@ -32,6 +34,7 @@ const SUBMIT_STELLAR = path.join(ROOT, "autoresearch-mine", "scripts", "submit_p
 const LINK_STELLAR = path.join(ROOT, "autoresearch-mine", "scripts", "link_identity_stellar.mjs");
 const C_ID = `C${"A".repeat(55)}`;
 const G_ADDR = `G${"A".repeat(55)}`;
+const XDR = "AAAAAgAAAAA=";
 const GIT_VECTORS = path.resolve(ROOT, "..", "smart-contracts", "test-vectors", "git.json");
 
 function run(cmd, args, cwd) {
@@ -69,6 +72,37 @@ function makeRepo() {
   run("git", ["add", "-A"], dir);
   run("git", ["commit", "-q", "-m", "baseline"], dir);
   return dir;
+}
+
+async function requestJson(url, { method = "GET", body } = {}) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = http.request(
+      {
+        method,
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: `${parsed.pathname}${parsed.search}`,
+        headers: body ? { "content-type": "application/json" } : {},
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          const payload = text ? JSON.parse(text) : null;
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(payload?.error || res.statusMessage));
+            return;
+          }
+          resolve(payload);
+        });
+      },
+    );
+    req.on("error", reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
 }
 
 test("stellar is wired through neutral chain registries", () => {
@@ -252,4 +286,33 @@ test("stellar identity link dry-run writes payload", () => {
   assert.equal(linked.chain, "stellar");
   assert.equal(linked.action, "link");
   assert.equal(linked.address, G_ADDR);
+});
+
+test("local stellar wallet session returns signed XDR through callback", async () => {
+  const session = await startLocalStellarWalletPublish({
+    network: "testnet",
+    rpcUrl: "https://example.invalid/rpc",
+    networkPassphrase: "Test Network",
+    contractId: C_ID,
+    open: false,
+  });
+  try {
+    const base = session.url.replace(/\/sign$/, "");
+    await requestJson(`${base}/account`, {
+      method: "POST",
+      body: { address: G_ADDR },
+    });
+    assert.equal(await session.waitForAccount(), G_ADDR);
+    const signing = session.signTransaction(XDR, { address: G_ADDR });
+    const pending = await requestJson(`${base}/sign-request`);
+    assert.equal(pending.request.xdr, XDR);
+    assert.equal(pending.request.address, G_ADDR);
+    await requestJson(`${base}/signed`, {
+      method: "POST",
+      body: { id: pending.request.id, address: G_ADDR, signedTxXdr: XDR },
+    });
+    assert.deepEqual(await signing, { signedTxXdr: XDR, signerAddress: G_ADDR });
+  } finally {
+    await session.close();
+  }
 });
